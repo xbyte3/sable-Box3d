@@ -7,7 +7,12 @@ import foundry.veil.platform.registry.RegistryObject;
 import net.minecraft.core.Registry;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.minecraft.world.level.block.state.properties.SlabType;
 import net.minecraft.world.phys.Vec3;
+import org.jetbrains.annotations.Nullable;
+import java.util.function.Function;
 
 /**
  * All default physics block properties
@@ -25,7 +30,12 @@ public class PhysicsBlockPropertyTypes {
     /**
      * The mass of a block in [kpg]
      */
-    public static final RegistryObject<PhysicsBlockPropertyType<Double>> MASS = register(Sable.sablePath("mass"), Codec.DOUBLE, 1.0);
+    public static final RegistryObject<PhysicsBlockPropertyType<Double>> MASS = registerState(Sable.sablePath("mass"), Codec.DOUBLE, state -> {
+        if (state.hasProperty(BlockStateProperties.SLAB_TYPE) && state.getValue(BlockStateProperties.SLAB_TYPE) == SlabType.DOUBLE) {
+            return 2.0;
+        }
+        return 1.0;
+    });
     /**
      * The optional 3d vector representing the principal inertia of the block
      */
@@ -58,6 +68,7 @@ public class PhysicsBlockPropertyTypes {
     public static void register() {
         // no-op
     }
+
     /**
      * Registers a physics block property.
      *
@@ -65,7 +76,18 @@ public class PhysicsBlockPropertyTypes {
      * @param codec The codec defining serialization/deserialization for the property
      * @return The registered property
      */
-    private static <T> RegistryObject<PhysicsBlockPropertyType<T>> register(final ResourceLocation id, final Codec<T> codec, final T defaultValue) {
+    private static <T> RegistryObject<PhysicsBlockPropertyType<T>> register(final ResourceLocation id, final Codec<T> codec, final @Nullable T defaultValue) {
+        return registerState(id, codec, state -> defaultValue);
+    }
+
+    /**
+     * Registers a physics block property.
+     *
+     * @param id    The id of the property
+     * @param codec The codec defining serialization/deserialization for the property
+     * @return The registered property
+     */
+    private static <T> RegistryObject<PhysicsBlockPropertyType<T>> registerState(final ResourceLocation id, final Codec<T> codec, final Function<BlockState, T> defaultValue) {
         // Throw if the property is already registered
         if (REGISTRY.containsKey(id)) {
             throw new IllegalArgumentException("Duplicate physics block property: %s".formatted(id));
@@ -114,7 +136,7 @@ public class PhysicsBlockPropertyTypes {
         throw new IllegalArgumentException("Unknown physics block property: %s".formatted(id));
     }
 
-    public record PhysicsBlockPropertyType<T>(int id, Codec<T> codec, T defaultValue) {
+    public record PhysicsBlockPropertyType<T>(int id, Codec<T> codec, Function<BlockState, T> defaultValue) {
     }
 
 }

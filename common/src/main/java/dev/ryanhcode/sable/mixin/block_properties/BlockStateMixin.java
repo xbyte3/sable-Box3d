@@ -53,7 +53,7 @@ public class BlockStateMixin implements BlockStateExtension {
     public <T> T sable$getProperty(final PhysicsBlockPropertyTypes.PhysicsBlockPropertyType<T> type) {
         // return default if we have no properties or the property is not set on this block
         if (this.sable$properties == null || this.sable$properties[type.id()] == null) {
-            return type.defaultValue();
+            return type.defaultValue().apply((BlockState) (Object) this);
         }
 
         //noinspection unchecked
