@@ -14,7 +14,11 @@ import dev.ryanhcode.sable.platform.SablePlotPlatform;
 import dev.ryanhcode.sable.sublevel.ServerSubLevel;
 import dev.ryanhcode.sable.sublevel.SubLevel;
 import dev.ryanhcode.sable.sublevel.system.SubLevelPhysicsSystem;
-import it.unimi.dsi.fastutil.objects.*;
+import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.objects.ObjectCollection;
+import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
+import it.unimi.dsi.fastutil.objects.ObjectSet;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.core.Registry;
@@ -74,7 +78,7 @@ public class ServerLevelPlot extends LevelPlot {
     /**
      * All LiftProviders within this plot.
      */
-    private final Object2ObjectMap<BlockPos, BlockSubLevelLiftProvider.LiftProviderContext> liftProviders = new Object2ObjectOpenHashMap<>();
+    private final Long2ObjectMap<BlockSubLevelLiftProvider.LiftProviderContext> liftProviders = new Long2ObjectOpenHashMap<>();
 
     /**
      * Creates a new plot at the given plot coordinate.
@@ -659,10 +663,10 @@ public class ServerLevelPlot extends LevelPlot {
     public void onBlockChange(final BlockPos pos, final BlockState state) {
         super.onBlockChange(pos, state);
 
-        this.liftProviders.remove(pos);
+        this.liftProviders.remove(pos.asLong());
 
         if (state.getBlock() instanceof final BlockSubLevelLiftProvider prov) {
-            this.liftProviders.put(pos, new BlockSubLevelLiftProvider.LiftProviderContext(pos, state, Vec3.atLowerCornerOf(prov.sable$getNormal(state).getNormal())));
+            this.liftProviders.put(pos.asLong(), new BlockSubLevelLiftProvider.LiftProviderContext(pos, state, Vec3.atLowerCornerOf(prov.sable$getNormal(state).getNormal())));
         }
     }
 
