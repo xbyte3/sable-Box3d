@@ -1,6 +1,6 @@
 - Allow for force-loading sub-levels (`/sable forceload <add|remove>`)
 - Catch Sable Rapier panics nicely and crash the game normally (#477)
-- Update Sodium compatibility to 0.8.13
+- Update Sodium compatibility to 0.8.13 alpha
 - Update NeoForge version
 
 - Add a config for sub-level saving messages
