@@ -22,9 +22,11 @@ neoForge {
         }
         client {
             client()
+            gameDirectory = project.file("runs/client")
         }
         server {
             server()
+            gameDirectory = project.file("runs/server")
         }
         gameTest {
             type = "gameTestServer"
@@ -35,11 +37,13 @@ neoForge {
             client()
             ideName = "NeoForge Client | Mixin Export (${project.path})"
             systemProperty("mixin.debug.export", "true")
+            gameDirectory = project.file("runs/client")
         }
         serverMixinExport {
             server()
             ideName = "NeoForge Server | Mixin Export (${project.path})"
             systemProperty("mixin.debug.export", "true")
+            gameDirectory = project.file("runs/server")
         }
     }
     mods {

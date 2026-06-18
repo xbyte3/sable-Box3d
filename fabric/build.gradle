@@ -73,11 +73,13 @@ loom {
             inherit(client)
             setConfigName(configName + " | Mixin Export")
             vmArg("-Dmixin.debug.export=true")
+            runDir("runs/client")
         }
         serverMixinExport {
             inherit(server)
             setConfigName(configName + " | Mixin Export")
             vmArg("-Dmixin.debug.export=true")
+            runDir("runs/server")
         }
     }
 }
