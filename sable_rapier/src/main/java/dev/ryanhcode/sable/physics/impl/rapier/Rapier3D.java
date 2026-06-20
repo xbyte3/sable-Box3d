@@ -101,7 +101,7 @@ public final class Rapier3D {
                     "Sable has failed to load the natives needed for its Rapier pipeline. Please report with system details and logs to {}",
                     Sable.ISSUE_TRACKER_URL,
                     t);
-            final CrashReport crashReport = CrashReport.forThrowable(t instanceof UnsatisfiedLinkError ? t.getCause() : t, "Sable linking with Rapier natives");
+            final CrashReport crashReport = CrashReport.forThrowable(t instanceof UnsatisfiedLinkError && t.getCause() != null ? t.getCause() : t, "Sable linking with Rapier natives");
             final CrashReportCategory category = crashReport.addCategory("Natives");
             category.setDetail("Name", Rapier3D.NATIVE_NAME);
             throw new ReportedException(crashReport);
