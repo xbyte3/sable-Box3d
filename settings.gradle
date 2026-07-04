@@ -51,3 +51,5 @@ include('fabric')
 include('neoforge')
 
 include 'sable_rapier'
+
+include 'sable_box3d'

@@ -1,0 +1,91 @@
+plugins {
+    id 'multiloader-common'
+    id 'net.neoforged.moddev'
+}
+
+import org.apache.tools.ant.taskdefs.condition.Os
+
+repositories {
+    mavenCentral()
+}
+
+neoForge {
+    neoFormVersion = neo_form_version
+
+    parchment {
+        minecraftVersion = parchment_minecraft
+        mappingsVersion = parchment_version
+    }
+}
+
+configurations {
+    commonJava {
+        canBeResolved = false
+        canBeConsumed = true
+    }
+    commonResources {
+        canBeResolved = false
+        canBeConsumed = true
+    }
+}
+
+def nativesDir = file("src/main/resources/native/box3d")
+
+dependencies {
+    implementation project(':common')
+    implementation project(':common')
+    implementation project(':common')
+    compileOnly(project(':common')) {
+        capabilities {
+            requireCapability "$group:$mod_id"
+        }
+    }
+
+    compileOnly "dev.ryanhcode.sable-companion:sable-companion-common-$minecraft_version:$sable_companion_version"
+
+    testImplementation platform('org.junit:junit-bom:6.0.0')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+jar {
+    manifest {
+        attributes(
+                'Specification-Title': mod_name,
+                'Specification-Vendor': mod_author,
+                'Specification-Version': project.jar.archiveVersion,
+                'Implementation-Title': project.name,
+                'Implementation-Version': project.jar.archiveVersion,
+                'Implementation-Vendor': mod_author,
+                'Built-On-Minecraft': minecraft_version,
+                'FMLModType': "GAMELIBRARY",
+                "Automatic-Module-Name": "sable_box3d"
+        )
+    }
+}
+
+artifacts {
+    commonJava sourceSets.main.java.sourceDirectories.singleFile
+    commonResources sourceSets.main.resources.sourceDirectories.singleFile
+}
+
+test {
+    useJUnitPlatform()
+}
+
+tasks.register('copyBox3dNative', Copy) {
+    group = 'native'
+
+    def dll = file("$rootDir/../build/Debug/box3d_jni.dll")
+
+    from(dll)
+    into("src/main/resources/native/box3d")
+
+    rename {
+        "box3d_x86_64_windows.dll"
+    }
+
+    doFirst {
+        println "Copying Box3D native: " + dll
+    }
+}
