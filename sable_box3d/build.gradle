@@ -3,6 +3,17 @@ plugins {
     id 'net.neoforged.moddev'
 }
 
+configurations {
+    commonJava {
+        canBeResolved = false
+        canBeConsumed = true
+    }
+    commonResources {
+        canBeResolved = false
+        canBeConsumed = true
+    }
+}
+
 repositories {
     mavenCentral()
 }

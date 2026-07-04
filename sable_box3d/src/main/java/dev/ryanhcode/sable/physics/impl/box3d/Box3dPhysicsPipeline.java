@@ -53,11 +53,11 @@ public class Box3dPhysicsPipeline implements PhysicsPipeline {
         }
 
         this.worldHandle = Box3dJNI.worldCreate();
-        Box3dJNI.worldSetGravity(worldHandle,
-                (float) gravity.x(),
-                (float) gravity.y(),
-                (float) gravity.z()
-        );
+        //Box3dJNI.worldSetGravity(worldHandle,
+        //        (float) gravity.x(),
+        //        (float) gravity.y(),
+        //        (float) gravity.z()
+        //);
     }
 
     @Override

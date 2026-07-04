@@ -38,3 +38,11 @@ Java_dev_ryanhcode_sable_physics_impl_box3d_Box3DJNI_worldDestroy
 
     delete holder;
 }
+
+JNIEXPORT void JNICALL
+Java_dev_ryanhcode_sable_physics_impl_box3d_Box3DJNI_worldSetGravity
+(JNIEnv*, jclass, jlong ptr, jfloat gx, jfloat gy, jfloat gz)
+{
+    auto* holder = reinterpret_cast<WorldHolder*>(ptr);
+    b3Vec3 gravity = {gx, gy, gz};
+}
