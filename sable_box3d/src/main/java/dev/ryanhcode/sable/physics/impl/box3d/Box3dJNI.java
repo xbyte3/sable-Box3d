@@ -1,22 +1,23 @@
 package dev.ryanhcode.sable.physics.impl.box3d;
 
-public final class Box3DJNI {
+public final class Box3dJNI {
 
     static {
         System.loadLibrary("box3d_jni");
     }
 
-    // World
+    // World functions
     public static native long worldCreate();
-    public static native void worldDestroy(long world);
+    public static native void worldDestroy(long worldHandle);
+    public static native void worldSetGravity(long worldHandle, float x, float y, float z);
+    public static native void worldStep(long worldHandle, float timeStep);
 
-    public static native void worldSetGravity(long world, float gx, float gy, float gz);
-    public static native void worldStep(long world, float dt);
+    // Body functions
+    public static native long bodyCreate(long worldHandle, float x, float y, float z);
+    public static native void bodyDestroy(long worldHandle, long bodyHandle);
+    public static native void bodyGetPose(long worldHandle, long bodyHandle, double[] poseArray);
+    public static native void bodySetPose(long worldHandle, long bodyHandle, double[] poseArray);
 
-    // Body
-    public static native long bodyCreateBox(long world, float x, float y, float z);
-    public static native void bodyDestroy(long world, long body);
-
-    public static native void bodySetTransform(long body, float x, float y, float z);
-    public static native void bodyGetTransform(long body, float[] out16); // mat4 or pos+rot
+    // Shape functions
+    public static native void shapeCreateBox(long bodyHandle, float halfX, float halfY, float halfZ, float mass);
 }

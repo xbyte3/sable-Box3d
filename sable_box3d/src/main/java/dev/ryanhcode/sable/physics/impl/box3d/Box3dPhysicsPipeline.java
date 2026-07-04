@@ -10,62 +10,41 @@ import dev.ryanhcode.sable.api.physics.object.rope.RopePhysicsObject;
 import dev.ryanhcode.sable.api.sublevel.KinematicContraption;
 import dev.ryanhcode.sable.companion.math.Pose3d;
 import dev.ryanhcode.sable.companion.math.Pose3dc;
+import dev.ryanhcode.sable.physics.impl.box3d.collider.Box3dVoxelColliderBakery;
 import dev.ryanhcode.sable.sublevel.ServerSubLevel;
 import dev.ryanhcode.sable.util.LevelAccelerator;
 import it.unimi.dsi.fastutil.ints.Int2ObjectArrayMap;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
-import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
-import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ReferenceArrayList;
 import it.unimi.dsi.fastutil.objects.ReferenceList;
 import net.minecraft.core.SectionPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunkSection;
-import org.jetbrains.annotations.NotNull;
 import org.joml.Quaterniondc;
 import org.joml.Vector3d;
 import org.joml.Vector3dc;
 
 import java.util.HashMap;
+import java.util.Map;
 
 public class Box3dPhysicsPipeline implements PhysicsPipeline {
-    /**
-     * Distance threshold for uploading sub-contraptions to the physics pipeline
-     */
-    private static final double DISTANCE_THRESHOLD = 1e-7;
-
-    /**
-     * Angle threshold for uploading sub-contraptions to the physics pipeline
-     */
-    private static final double ANGULAR_THRESHOLD = 1e-7;
-
     private final ServerLevel level;
-    private final LevelAccelerator accelerator;
-    // private final RapierVoxelColliderBakery colliderBakery;
+    //private final LevelAccelerator accelerator;
     private final Int2ObjectMap<ServerSubLevel> activeSubLevels = new Int2ObjectArrayMap<>();
-    private final Object2ObjectMap<KinematicContraption, TrackedKinematicContraption> activeContraptions = new Object2ObjectOpenHashMap<>();
-    private final Long2LongOpenHashMap recentCollisions = new Long2LongOpenHashMap();
     private final ReferenceList<PhysicsPipelineBody> queuedWakeUps = new ReferenceArrayList<>();
-    private final double[] poseCache;
-    private Box3dPhysicsScene scene;
 
+    private long worldHandle = 0;  // JNI handle
     private static int nextBodyID = 0;
-    private final Map<Integer, Body> bodyMap = new HashMap<>(); // ID -> Box3d Body
-    private final World world;
+    private final Map<Integer, Long> bodyHandles = new HashMap<>();  // ID -> JNI body handle
 
-    private void trackBody(int id, Body body) {
-        bodyMap.put(id, body);
-    }
-
-    public Box3dPhysicsPipeline(final @NotNull ServerLevel level) {
+    public Box3dPhysicsPipeline(final ServerLevel level) {
         this.level = level;
-        this.accelerator = new LevelAccelerator(level);
-        //this.colliderBakery = new RapierVoxelColliderBakery(this.accelerator);
-        this.recentCollisions.defaultReturnValue(-1);
-        this.poseCache = new double[7];
+        //this.accelerator = new LevelAccelerator(level);
+        //this.colliderBakery = new Box3dVoxelColliderBakery(this.accelerator);
+        //this.recentCollisions.defaultReturnValue(-1);
+        //this.poseCache = new double[7];
     }
-    private long world;
 
     @Override
     public void init(Vector3dc gravity, double universalDrag) {
@@ -73,10 +52,8 @@ public class Box3dPhysicsPipeline implements PhysicsPipeline {
             gravity = new Vector3d(0, -9.81, 0);
         }
 
-        world = Box3DJNI.worldCreate();
-
-        Box3DJNI.worldSetGravity(
-                world,
+        this.worldHandle = Box3dJNI.worldCreate();
+        Box3dJNI.worldSetGravity(worldHandle,
                 (float) gravity.x(),
                 (float) gravity.y(),
                 (float) gravity.z()
@@ -84,8 +61,16 @@ public class Box3dPhysicsPipeline implements PhysicsPipeline {
     }
 
     @Override
+    public void dispose() {
+        if (this.worldHandle != 0) {
+            Box3dJNI.worldDestroy(this.worldHandle);
+            this.worldHandle = 0;
+        }
+    }
+
+    @Override
     public void physicsTick(double timeStep) {
-        Box3DJNI.worldStep(world, (float) timeStep);
+        Box3dJNI.worldStep(this.worldHandle, (float) timeStep);
     }
 
     @Override
@@ -171,11 +156,6 @@ public class Box3dPhysicsPipeline implements PhysicsPipeline {
     @Override
     public int getNextRuntimeID() {
         return nextBodyID++;
-    }
-
-    @Override
-    public void dispose() {
-        Box3DJNI.worldDestroy(world);
     }
 
     @Override

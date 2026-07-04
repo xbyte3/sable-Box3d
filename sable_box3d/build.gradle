@@ -3,38 +3,19 @@ plugins {
     id 'net.neoforged.moddev'
 }
 
-import org.apache.tools.ant.taskdefs.condition.Os
-
 repositories {
     mavenCentral()
 }
 
 neoForge {
     neoFormVersion = neo_form_version
-
     parchment {
         minecraftVersion = parchment_minecraft
         mappingsVersion = parchment_version
     }
 }
 
-configurations {
-    commonJava {
-        canBeResolved = false
-        canBeConsumed = true
-    }
-    commonResources {
-        canBeResolved = false
-        canBeConsumed = true
-    }
-}
-
-def nativesDir = file("src/main/resources/native/box3d")
-
 dependencies {
-    implementation project(':common')
-    implementation project(':common')
-    implementation project(':common')
     compileOnly(project(':common')) {
         capabilities {
             requireCapability "$group:$mod_id"
@@ -71,21 +52,4 @@ artifacts {
 
 test {
     useJUnitPlatform()
-}
-
-tasks.register('copyBox3dNative', Copy) {
-    group = 'native'
-
-    def dll = file("$rootDir/../build/Debug/box3d_jni.dll")
-
-    from(dll)
-    into("src/main/resources/native/box3d")
-
-    rename {
-        "box3d_x86_64_windows.dll"
-    }
-
-    doFirst {
-        println "Copying Box3D native: " + dll
-    }
 }
