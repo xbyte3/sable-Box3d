@@ -1,7 +1,50 @@
+buildscript {
+    dependencies {
+        classpath 'at.yawk.lz4:lz4-java:1.11.0'
+    }
+}
+
 plugins {
     id 'multiloader-common'
     id 'net.neoforged.moddev'
 }
+
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
+import net.jpountz.lz4.LZ4FrameOutputStream
+
+def mac(arch) {
+    [triple: "${arch}-apple-darwin", suffix: "", arch: arch, os: "macos", ext: "dylib", lib: true]
+}
+
+def linux(arch) {
+    [triple: "${arch}-unknown-linux-gnu", suffix: ".2.17", arch: arch, os: "linux", ext: "so", lib: true]
+}
+
+def freebsd(arch) {
+    [triple: "${arch}-unknown-freebsd", suffix: "", arch: arch, os: "freebsd", ext: "so", lib: true]
+}
+
+def windows(arch) {
+    [triple: "${arch}-pc-windows-msvc", suffix: "", arch: arch, os: "windows", ext: "dll", lib: false]
+}
+
+def supportedTargets = [
+        mac("x86_64"),
+        mac("aarch64"),
+        linux("x86_64"),
+        linux("aarch64"),
+        windows("x86_64"),
+        windows("aarch64"),
+//        freebsd("x86_64"),
+        // freebsd("aarch64"),
+]
+
+def nativesNameForTarget = { target ->
+    "box3d_${target.arch}_${target.os}.${target.ext}"
+}
+
+def nativeBinary = file("./native/build/Release/box3d_jni.dll")
 
 configurations {
     commonJava {
@@ -63,4 +106,51 @@ artifacts {
 
 test {
     useJUnitPlatform()
+}
+
+tasks.register("buildBox3dNative", Exec) {
+    workingDir file("./native")
+
+    commandLine "cmd", "/c",
+            "\"\"C:\\Program Files\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Auxiliary\\Build\\vcvars64.bat\" && cmake --build build --config Release\""
+}
+
+tasks.register("packageBox3dNative") {
+
+    //dependsOn "buildBox3dNative"
+
+    doLast {
+
+        def target = [
+                arch: "x86_64",
+                os: "windows",
+                ext: "dll"
+        ]
+
+        def output = file("src/main/resources/natives/box3d/box3d_binaries.zip.l4z")
+        output.parentFile.mkdirs()
+
+        def nativeFile = file("./native/build/Release/box3d_jni.dll")
+        if (!nativeFile.exists()) {
+            throw new GradleException("Native binary not found: " + nativeFile)
+        }
+
+        // 1. сначала ZIP в memory
+        def zipBytes = new ByteArrayOutputStream()
+        def zip = new ZipOutputStream(zipBytes)
+
+        def entryName = "box3d_${target.arch}_${target.os}.${target.ext}"
+
+        zip.putNextEntry(new ZipEntry(entryName))
+        zip.write(nativeFile.bytes)
+        zip.closeEntry()
+        zip.close()
+
+        // 2. потом LZ4
+        output.withOutputStream { os ->
+            new LZ4FrameOutputStream(os).withCloseable { lz4 ->
+                lz4.write(zipBytes.toByteArray())
+            }
+        }
+    }
 }

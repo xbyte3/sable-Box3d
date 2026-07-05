@@ -1,48 +1,41 @@
 #include "box3d_jni.h"
 #include "include/box3d.h"
 
-struct WorldHolder {
-    b3WorldId world;
-};
+static inline b3WorldId toWorld(jlong handle)
+{
+    return b3LoadWorldId((uint32_t)handle);
+}
 
 JNIEXPORT jlong JNICALL
-Java_dev_ryanhcode_sable_physics_impl_box3d_Box3DJNI_worldCreate
+Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_worldCreate
 (JNIEnv*, jclass, jfloat gx, jfloat gy, jfloat gz)
 {
-    WorldHolder* holder = new WorldHolder();
-
     b3WorldDef def = b3DefaultWorldDef();
     def.gravity = { gx, gy, gz };
 
-    holder->world = b3CreateWorld(&def);
+    b3WorldId world = b3CreateWorld(&def);
 
-    return reinterpret_cast<jlong>(holder);
+    return (jlong)b3StoreWorldId(world);
 }
 
 JNIEXPORT void JNICALL
-Java_dev_ryanhcode_sable_physics_impl_box3d_Box3DJNI_worldStep
-(JNIEnv*, jclass, jlong ptr, jfloat dt, jint substeps)
+Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_worldStep
+(JNIEnv*, jclass, jlong worldHandle, jfloat dt, jint substeps)
 {
-    auto* holder = reinterpret_cast<WorldHolder*>(ptr);
-
-    b3World_Step(holder->world, dt, substeps);
+    b3World_Step(toWorld(worldHandle), dt, substeps);
 }
 
 JNIEXPORT void JNICALL
-Java_dev_ryanhcode_sable_physics_impl_box3d_Box3DJNI_worldDestroy
-(JNIEnv*, jclass, jlong ptr)
+Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_worldDestroy
+(JNIEnv*, jclass, jlong worldHandle)
 {
-    auto* holder = reinterpret_cast<WorldHolder*>(ptr);
-
-    b3DestroyWorld(holder->world);
-
-    delete holder;
+    b3DestroyWorld(toWorld(worldHandle));
 }
 
 JNIEXPORT void JNICALL
-Java_dev_ryanhcode_sable_physics_impl_box3d_Box3DJNI_worldSetGravity
-(JNIEnv*, jclass, jlong ptr, jfloat gx, jfloat gy, jfloat gz)
+Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_worldSetGravity
+(JNIEnv*, jclass, jlong worldHandle, jfloat gx, jfloat gy, jfloat gz)
 {
-    auto* holder = reinterpret_cast<WorldHolder*>(ptr);
-    b3Vec3 gravity = {gx, gy, gz};
+    b3Vec3 gravity = { gx, gy, gz };
+    b3World_SetGravity(toWorld(worldHandle), gravity);
 }
