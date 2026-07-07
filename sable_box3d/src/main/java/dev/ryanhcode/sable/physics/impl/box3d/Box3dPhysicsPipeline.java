@@ -10,6 +10,9 @@ import dev.ryanhcode.sable.api.physics.object.rope.RopePhysicsObject;
 import dev.ryanhcode.sable.api.sublevel.KinematicContraption;
 import dev.ryanhcode.sable.companion.math.Pose3d;
 import dev.ryanhcode.sable.companion.math.Pose3dc;
+import dev.ryanhcode.sable.physics.impl.box3d.box.Box3dBoxHandle;
+import dev.ryanhcode.sable.physics.impl.box3d.collider.Box3dBlockColliderData;
+import dev.ryanhcode.sable.physics.impl.box3d.collider.Box3dColliderBakery;
 import dev.ryanhcode.sable.sublevel.ServerSubLevel;
 import dev.ryanhcode.sable.util.LevelAccelerator;
 import it.unimi.dsi.fastutil.ints.Int2ObjectArrayMap;
@@ -23,6 +26,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunkSection;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.jetbrains.annotations.ApiStatus;
 import org.joml.Quaterniondc;
 import org.joml.Vector3d;
 import org.joml.Vector3dc;
@@ -37,18 +41,33 @@ public class Box3dPhysicsPipeline implements PhysicsPipeline {
     private final Int2ObjectMap<ServerSubLevel> activeSubLevels = new Int2ObjectArrayMap<>();
     private final ReferenceList<PhysicsPipelineBody> queuedWakeUps = new ReferenceArrayList<>();
     private long worldHandle = 0;  // JNI handle
-    private final double[] poseCache;
+    private final float[] poseCache;
+    private final Box3dColliderBakery colliderBakery;
     private static int nextBodyID = 0;
-    private final Map<Integer, Long> bodyHandles = new HashMap<>();  // ID -> JNI body handle
+    private final Map<Integer, Long> bodies = new HashMap<>();  // ID -> JNI body handle
 
     private final Long2LongOpenHashMap recentCollisions = new Long2LongOpenHashMap();
 
     public Box3dPhysicsPipeline(final ServerLevel level) {
         this.level = level;
         this.accelerator = new LevelAccelerator(level);
-        //this.colliderBakery = new Box3dVoxelColliderBakery(this.accelerator);
+        this.colliderBakery = new Box3dColliderBakery(this.accelerator);
         this.recentCollisions.defaultReturnValue(-1);
-        this.poseCache = new double[7];
+        this.poseCache = new float[7];
+    }
+
+    public long getBodyID(final int id) {
+        final Long value = this.bodies.get(id);
+
+        if (value == null) {
+            throw new IllegalStateException("Body not found: " + id);
+        }
+
+        return value;
+    }
+
+    public void addBodyID(final int id, final long body) {
+        this.bodies.put(id, body);
     }
 
     @Override
@@ -62,7 +81,7 @@ public class Box3dPhysicsPipeline implements PhysicsPipeline {
                 (float) gravity.y(),
                 (float) gravity.z());
 
-        log.info("Hi! {}", Long.toString(this.worldHandle));
+        log.info("Hi! {}", this.worldHandle);
     }
 
     @Override
@@ -76,28 +95,54 @@ public class Box3dPhysicsPipeline implements PhysicsPipeline {
     }
 
     @Override
-    public void physicsTick(double timeStep) {
+    public void physicsTick(final double timeStep) {
         Box3dJNI.worldStep(this.worldHandle, (float) timeStep, 1);
     }
 
+    /**
+     * Called after all physics substeps have been run, to finalize the physics tick.
+     */
     @Override
     public void postPhysicsTicks() {
-
+        //this.processCollisionEffects();
     }
 
+    /**
+     * Runs a tick to update any separate sub-level tracking / logic, even if physics is currently paused
+     */
     @Override
     public void tick() {
-
+        this.accelerator.clearCache();
     }
 
     @Override
-    public void add(ServerSubLevel subLevel, Pose3dc pose) {
+    public void add(final ServerSubLevel subLevel, final Pose3dc pose) {
+        this.assertBodyValid(subLevel);
+        final Vector3dc pos = pose.position();
+        final Quaterniondc rot = pose.orientation();
 
+        final long body = Box3dJNI.createSublevel(this.worldHandle, new float[]{(float) pos.x(), (float) pos.y(), (float) pos.z(), (float) rot.x(), (float) rot.y(), (float) rot.z(), (float) rot.w()});
+        this.addBodyID(subLevel.getRuntimeId(), body);
+
+        subLevel.updateMergedMassData(1.0f);
+        final Vector3dc centerOfMass = subLevel.getMassTracker().getCenterOfMass();
+
+        if (centerOfMass != null) {
+            subLevel.logicalPose().rotationPoint().set(centerOfMass);
+
+            this.onStatsChanged(subLevel);
+        }
+
+        this.activeSubLevels.put(subLevel.getRuntimeId(), subLevel);
     }
 
+    /**
+     * Removes a {@link ServerSubLevel} from the physics pipeline.
+     */
     @Override
-    public void remove(ServerSubLevel subLevel) {
-
+    public void remove(final ServerSubLevel subLevel) {
+        Box3dJNI.removeSubLevel(this.getBodyID(subLevel.getRuntimeId()));
+        this.activeSubLevels.remove(subLevel.getRuntimeId());
     }
 
     @Override
@@ -110,9 +155,23 @@ public class Box3dPhysicsPipeline implements PhysicsPipeline {
 
     }
 
+    private void assertBodyValid(final PhysicsPipelineBody body) {
+        if (body.isRemoved()) {
+            throw new RuntimeException("Body has been removed");
+        }
+    }
+
     @Override
     public Pose3d readPose(ServerSubLevel subLevel, Pose3d dest) {
-        return null;
+        this.assertBodyValid(subLevel);
+        final long body = this.getBodyID(subLevel.getRuntimeId());
+
+        Box3dJNI.getPose(body, this.poseCache);
+
+        dest.position().set(this.poseCache[0], this.poseCache[1], this.poseCache[2]);
+        dest.orientation().set(this.poseCache[3], this.poseCache[4], this.poseCache[5], this.poseCache[6]);
+
+        return dest;
     }
 
     @Override
@@ -121,8 +180,8 @@ public class Box3dPhysicsPipeline implements PhysicsPipeline {
     }
 
     @Override
-    public BoxHandle addBox(BoxPhysicsObject boxPhysicsObject) {
-        return null;
+    public BoxHandle addBox(final BoxPhysicsObject boxPhysicsObject) {
+        return Box3dBoxHandle.create(this.worldHandle, boxPhysicsObject.getPose(), boxPhysicsObject.getHalfExtents(), (float) boxPhysicsObject.getMass());
     }
 
     @Override
@@ -156,8 +215,8 @@ public class Box3dPhysicsPipeline implements PhysicsPipeline {
     }
 
     @Override
-    public void wakeUp(PhysicsPipelineBody body) {
-
+    public void wakeUp(final PhysicsPipelineBody body) {
+        Box3dJNI.wakeUpObject(body.getRuntimeId());
     }
 
     @Override

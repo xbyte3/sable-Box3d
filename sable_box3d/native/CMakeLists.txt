@@ -3,23 +3,43 @@ project(box3d_jni)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
-set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
 
+# --- JNI ---
 find_package(JNI REQUIRED)
+find_package(Java 21)
+include(UseJava)
 
+# --- JNI native library ---
 add_library(box3d_jni SHARED
     box3d_jni.cpp
-)
+ "sublevel_octree.cpp")
 
 target_include_directories(box3d_jni PRIVATE
     ${JNI_INCLUDE_DIRS}
     ${CMAKE_SOURCE_DIR}/include
 )
 
-add_library(box3d STATIC IMPORTED)
-
-set_target_properties(box3d PROPERTIES
-    IMPORTED_LOCATION ${CMAKE_SOURCE_DIR}/lib/box3d.lib
+# --- /lib/* ---
+target_link_libraries(box3d_jni PRIVATE
+    ${CMAKE_SOURCE_DIR}/lib/box3dd.lib
 )
 
-target_link_libraries(box3d_jni PRIVATE box3d)
+# Link
+target_link_libraries(box3d_jni PRIVATE
+    ${BOX3D_LIBS}
+)
+
+target_compile_definitions(box3d_jni PRIVATE BOX3D_DOUBLE_PRECISION)
+
+set_property(TARGET box3d_jni PROPERTY
+    MSVC_RUNTIME_LIBRARY "MultiThreadedDLL"
+)
+
+target_compile_options(box3d_jni PRIVATE /W3)
+
+# --- Debug info ---
+message(STATUS "JNI include dirs: ${JNI_INCLUDE_DIRS}")
+message(STATUS "Found Box3D libs:")
+foreach(lib ${BOX3D_LIBS})
+    message(STATUS "  ${lib}")
+endforeach()

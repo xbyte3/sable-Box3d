@@ -3,16 +3,17 @@ package dev.ryanhcode.sable.physics.impl.box3d;
 import dev.ryanhcode.sable.Sable;
 import dev.ryanhcode.sable.platform.SableLoaderPlatform;
 import net.jpountz.lz4.LZ4FrameInputStream;
+import org.jetbrains.annotations.ApiStatus;
 
 import java.nio.file.*;
 import java.io.*;
+import java.util.HashMap;
 import java.util.zip.*;
 
 public final class Box3dJNI {
-
+    public static final String NATIVE_NAME = getNativeName();
     private static final Path NATIVE_DIR = resolveNativeDir();
     private static final String LIB_ZIP_NAME = "box3d_binaries.zip.l4z";
-    public static final String NATIVE_NAME = getNativeName();
 
     private static String getNativeName() {
 
@@ -90,24 +91,37 @@ public final class Box3dJNI {
         }
     }
 
-    // World functions
     public static native long worldCreate(float gx, float gy, float gz);
-
-    public static native long worldCreateDefault();
-
     public static native void worldDestroy(long worldHandle);
-
-    public static native void worldSetGravity(long worldHandle, float x, float y, float z);
-
     public static native void worldStep(long worldHandle, float dt, int substeps);
 
-    // Body functions
-    public static native long bodyCreate(long worldHandle, float x, float y, float z);
-    public static native void bodyDestroy(long worldHandle, long bodyHandle);
-    public static native void bodyGetPose(long worldHandle, long bodyHandle, float[] pose);
-    public static native void bodySetPose(long worldHandle, long bodyHandle, float[] pose);
+    public static native long createSublevel(long worldHandle, float[] pose);
+    public static native void removeSubLevel(long body);
 
-    // Shape functions
-    public static native void shapeCreateBox(long bodyHandle, float halfX, float halfY, float halfZ, float mass);
+    /**
+     * All poses are formatted in a double array as:
+     * [x, y, z, qx, qy, qz, qw]
+     */
+    @ApiStatus.Internal
+    public static native long createBox(final long worldHandle, float mass, float halfExtentsX, float halfExtentsY, float halfExtentsZ, float[] pose);
 
+    @ApiStatus.Internal
+    public static native void removeBox(final long body);
+
+    /**
+     * Gets the pose of an body.
+     *
+     * @param body    the body pointer
+     * @param store The array to store pose of the body in the format [x, y, z, qx, qy, qz, qw]
+     */
+    @ApiStatus.Internal
+    public static native void getPose(final long body, float[] store);
+
+    /**
+     * "Wakes up" an object, indicating environmental or other changes have occurred that should resume physics if idled or sleeping
+     *
+     * @param body the object ID
+     */
+    @ApiStatus.Internal
+    public static native void wakeUpObject(final long body);
 }
