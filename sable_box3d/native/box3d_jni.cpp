@@ -5,7 +5,6 @@
 #include <stdexcept>
 #include <cassert>
 #include <unordered_map>
-#include "sublevel_octree.cpp"
 
 typedef enum {
     EMPTY,
@@ -61,33 +60,25 @@ struct ChunkSection {
 constexpr int32_t OCTREE_CHUNK_SHIFT = 6;
 constexpr int32_t OCTREE_CHUNK_SIZE = 1 << OCTREE_CHUNK_SHIFT;
 
-
-struct OctreeChunkSection
-{
-    SubLevelOctree octree;
-    SubLevelOctree liquidOctree;
-
-
-    OctreeChunkSection()
-        : octree(OCTREE_CHUNK_SHIFT),
-        liquidOctree(OCTREE_CHUNK_SHIFT)
-    {
-    }
-};
-
 using LevelColliderID = size_t;
 
 struct WorldData {
     std::unordered_map<int64_t, ChunkSection> mainLevelChunks;
     std::unordered_map<LevelColliderID, b3BodyId> bodies;
-    std::unordered_map<int64_t, OctreeChunkSection> octreeChunks;
 
-    //SableJointSet joint_set;
+    // Статическое тело, на которое навешиваются шейпы глобального (world) террейна.
+    b3BodyId levelBody = b3_nullBodyId;
 
-    //RopeMap rope_map;
+    // Шейпы, созданные для каждого чанка глобального уровня, чтобы их можно
+    // было удалить/пересоздать в addChunk/removeChunk без утечек.
+    std::unordered_map<int64_t, std::vector<b3ShapeId>> globalChunkShapes;
 
-    //std::unordered_map<LevelColliderID, ActiveLevelColliderInfo> levelColliders;
-    
+    // То же самое, но для чанков, принадлежащих конкретному sub-level объекту
+    // (object_id). При удалении самого объекта (removeSublevel) тело
+    // уничтожается вместе со всеми шейпами автоматически, эта карта нужна
+    // только чтобы addChunk не плодил дубликаты при повторном вызове на тот
+    // же чанк.
+    std::unordered_map<LevelColliderID, std::unordered_map<int64_t, std::vector<b3ShapeId>>> objectChunkShapes;
 };
 
 std::unordered_map<uint32_t, WorldData> worldData;
@@ -102,112 +93,78 @@ inline int64_t packSectionPosition(int32_t i, int32_t j, int32_t k)
         (static_cast<int64_t>(j) & Y_MASK);
 }
 
-struct VoxelColliderMap
+// Единичный box hull (полублоки 0.5 по каждой оси), переиспользуется для
+// каждого твёрдого вокселя через b3CreateTransformedHullShape, чтобы не
+// пересобирать геометрию хала на каждый блок.
+static const b3BoxHull& unitVoxelHull()
 {
-private:
+    static const b3BoxHull hull = b3MakeBoxHull(0.5f, 0.5f, 0.5f);
+    return hull;
+}
 
-    std::vector<std::optional<VoxelColliderData>> voxelColliders;
+// Считаем воксель "твёрдым", если у него есть collider id и он не пустой/не
+// внутренний (Interior блоки не генерируют коллизию, как и в Rapier-версии).
+static inline bool isSolidBlock(const BlockState& state)
+{
+    return state.block_collider_id > 0
+        && state.voxel_state != VoxelPhysicsState::EMPTY
+        && state.voxel_state != VoxelPhysicsState::INTERIOR;
+}
 
+// Создаёт box-шейпы для всех твёрдых блоков чанка на заданном теле.
+// chunkOriginBlockX/Y/Z — координата блока (0,0,0) чанка в локальном
+// пространстве тела.
+static std::vector<b3ShapeId> createChunkShapes(
+    b3BodyId body,
+    const ChunkSection& chunk,
+    int32_t chunkOriginBlockX,
+    int32_t chunkOriginBlockY,
+    int32_t chunkOriginBlockZ)
+{
+    std::vector<b3ShapeId> shapes;
+    shapes.reserve(64); // обычно чанк не полностью сплошной
 
-    std::unordered_map<
-        IVec3,
-        std::optional<VoxelColliderData>,
-        IVec3Hash
-    > dynamicColliders;
+    b3ShapeDef shapeDef = b3DefaultShapeDef();
+    shapeDef.baseMaterial.friction = 0.6f;   // TODO: брать из VoxelColliderData, когда её портируем
+    shapeDef.baseMaterial.restitution = 0.0f;
+    shapeDef.density = 0.0f;        // геометрия террейна не должна влиять на массу тела
+    shapeDef.updateBodyMass = false;
 
+    for (int bx = 0; bx < CHUNK_SIZE; bx++) {
+        for (int by = 0; by < CHUNK_SIZE; by++) {
+            for (int bz = 0; bz < CHUNK_SIZE; bz++) {
+                BlockState state = chunk.get_block(bx, by, bz);
+                if (!isSolidBlock(state)) {
+                    continue;
+                }
 
+                b3Transform transform;
+                transform.q = b3Quat_identity;
+                transform.p = {
+                    (float)(chunkOriginBlockX + bx) + 0.5f,
+                    (float)(chunkOriginBlockY + by) + 0.5f,
+                    (float)(chunkOriginBlockZ + bz) + 0.5f,
+                };
 
-public:
+                b3ShapeId shape = b3CreateTransformedHullShape(
+                    body, &shapeDef, &unitVoxelHull().base, transform, { 1.0f, 1.0f, 1.0f });
 
-    VoxelColliderMap() = default;
-
-
-
-    const VoxelColliderData* get(
-        size_t index,
-        const IVec3& blockPos
-    ) const
-    {
-        const auto& collider =
-            voxelColliders.at(index);
-
-
-        if (collider.has_value() &&
-            collider->dynamic)
-        {
-            auto it =
-                dynamicColliders.find(blockPos);
-
-
-            if (it != dynamicColliders.end())
-            {
-                if (it->second.has_value())
-                    return &it->second.value();
+                shapes.push_back(shape);
             }
         }
-
-
-        if (collider.has_value())
-            return &collider.value();
-
-
-        return nullptr;
     }
-};
 
-void insertBlockOctree(
-    const VoxelColliderMap& colliderMap,
-    SubLevelOctree& octree,
-    const BlockState& state,
-    bool remove,
-    int32_t x,
-    int32_t y,
-    int32_t z
-)
+    return shapes;
+}
+
+static void destroyChunkShapes(std::vector<b3ShapeId>& shapes)
 {
-    int32_t blockColliderId = state.first; // state.0
-
-    const VoxelCollider* blockCollider = nullptr;
-
-    if (blockColliderId > 0)
-    {
-        blockCollider =
-            &colliderMap.voxelColliders
-            .at(static_cast<size_t>(blockColliderId - 1));
+    for (b3ShapeId shape : shapes) {
+        if (b3Shape_IsValid(shape)) {
+            b3DestroyShape(shape, /*updateBodyMass*/ false);
+        }
     }
-
-
-    VoxelPhysicsState voxelState = state.second; // state.1
-
-
-    bool solid =
-        voxelState != VoxelPhysicsState::Interior &&
-        voxelState != VoxelPhysicsState::Empty &&
-        blockColliderId > 0 &&
-        !blockCollider->collisionBoxes.empty();
-
-
-
-    if (remove && !solid)
-    {
-        octree.insert(
-            x,
-            y,
-            z,
-            -1
-        );
-    }
-
-
-    if (solid)
-    {
-        octree.insert(
-            x,
-            y,
-            z,
-            blockColliderId
-        );
-    }
+    shapes.clear();
 }
 
 // =======================
@@ -224,6 +181,15 @@ static inline b3WorldId toWorld(jlong h)
 static inline jlong fromWorld(b3WorldId id)
 {
     return (jlong)b3StoreWorldId(id);
+}
+
+// Возвращает WorldData для мира по его jlong-хэндлу. Централизует явное
+// сужение jlong -> uint32_t (ключ worldData совпадает по типу с b3WorldId's
+// index+generation, упакованными в b3StoreWorldId), чтобы не плодить неявные
+// narrowing-конверсии (C4244) по всему файлу.
+static inline WorldData& getWorldData(jlong worldHandle)
+{
+    return worldData.at((uint32_t)worldHandle);
 }
 
 // =======================
@@ -251,7 +217,12 @@ Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_worldCreate
     b3WorldDef def = b3DefaultWorldDef();
     def.gravity = { gx, gy, gz };
     jlong worldHandle = fromWorld(b3CreateWorldDoublePrecision(&def));
-    worldData[worldHandle] = WorldData{};
+
+    WorldData& data = getWorldData(worldHandle);
+
+    b3BodyDef levelBodyDef = b3DefaultBodyDef();
+    levelBodyDef.type = b3_staticBody;
+    data.levelBody = b3CreateBody(toWorld(worldHandle), &levelBodyDef);
 
     return worldHandle;
 }
@@ -298,16 +269,14 @@ Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_getPose
 
 JNIEXPORT jlong JNICALL
 Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_createSublevel
-(JNIEnv* env, jclass, jlong world, jdoubleArray pose)
+(JNIEnv* env, jclass, jlong world, jint id, jdoubleArray pose)
 {
     b3BodyDef def = b3DefaultBodyDef();
     def.type = b3_dynamicBody;
 
     jdouble* elements = env->GetDoubleArrayElements(pose, nullptr);
-
     def.position = { elements[0], elements[1], elements[2] };
     def.rotation = { (float)elements[3], (float)elements[4], (float)elements[5], (float)elements[6] };
-
     env->ReleaseDoubleArrayElements(pose, elements, JNI_ABORT);
 
     b3BodyId body = b3CreateBody(toWorld(world), &def);
@@ -323,6 +292,9 @@ Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_createSublevel
     myMassData.inertia = b3Mat3_identity;
     b3Body_SetMassData(body, myMassData);
 
+    WorldData& data = getWorldData(world);
+    data.bodies[(LevelColliderID)id] = body;
+
     return fromBody(body);
 }
 
@@ -333,9 +305,12 @@ Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_removeSublevel
     b3DestroyBody(toBody(body));
 }
 
-JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_addChunk(JNIEnv* env, jclass, jlong worldHandle, jint x, jint y, jint z, jintArray intData, jboolean global, jint object_id)
+JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_addChunk(
+    JNIEnv* env, jclass, jlong worldHandle, jint x, jint y, jint z,
+    jintArray intData, jboolean global, jint object_id)
 {
-    jint* ints = env->GetIntArrayElements(intData, nullptr);
+    std::vector<jint> ints(4096);
+    env->GetIntArrayRegion(intData, 0, 4096, ints.data());
 
     std::vector<BlockState> blocks;
     blocks.reserve(4096);
@@ -343,36 +318,70 @@ JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_addC
     for (int i = 0; i < 4096; i++) {
         uint32_t block = (uint32_t)ints[i];
 
-        uint16_t block_collider_id = block >> 16;
-        uint16_t voxel_state_id = block & 0xFFFF;
+        uint16_t blockColliderId = block >> 16;
+        uint16_t voxelStateId = block & 0xFFFF;
 
-        if (voxel_state_id < 5) {
-            blocks.push_back({
-                (uint32_t)block_collider_id,
-                ALL_VOXEL_PHYSICS_STATES[voxel_state_id]
-                });
+        if (voxelStateId >= 5) {
+            voxelStateId = 0; // EMPTY
         }
-    }
 
+        blocks.push_back({ (uint32_t)blockColliderId, ALL_VOXEL_PHYSICS_STATES[voxelStateId] });
+    }
 
     ChunkSection chunk(std::move(blocks));
 
-    b3WorldId world = toWorld(worldHandle);
-    
-    auto& data = worldData.at(worldHandle);
+    WorldData& data = getWorldData(worldHandle);
+    int64_t packedPos = packSectionPosition(x, y, z);
 
-    if (global == 0) {
-        if (object_id != -1) {
-            //b3BodyId& body = levelColliders.at(objectId);
-        }
+    data.mainLevelChunks.insert_or_assign(packedPos, chunk);
+    const ChunkSection& storedChunk = data.mainLevelChunks.at(packedPos);
+
+    if (global != 0) {
+        std::vector<b3ShapeId>& shapes = data.globalChunkShapes[packedPos];
+        destroyChunkShapes(shapes);
+
+        shapes = createChunkShapes(
+            data.levelBody, storedChunk,
+            x << CHUNK_SHIFT, y << CHUNK_SHIFT, z << CHUNK_SHIFT);
+
+        return;
     }
 
-    data.mainLevelChunks.emplace(
-        packSectionPosition(x, y, z),
-        chunk
-    );
+    if (object_id == -1) {
+        return;
+    }
 
-    env->ReleaseIntArrayElements(intData, ints, JNI_ABORT);
+    b3BodyId objectBody = data.bodies.at((LevelColliderID)object_id);
+
+    std::vector<b3ShapeId>& shapes = data.objectChunkShapes[(LevelColliderID)object_id][packedPos];
+    destroyChunkShapes(shapes);
+
+    shapes = createChunkShapes(
+        objectBody, storedChunk,
+        x << CHUNK_SHIFT, y << CHUNK_SHIFT, z << CHUNK_SHIFT);
+}
+
+JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_removeChunk(
+    JNIEnv*, jclass, jlong worldHandle, jint x, jint y, jint z, jboolean global)
+{
+    WorldData& data = getWorldData(worldHandle);
+    int64_t packedPos = packSectionPosition(x, y, z);
+
+    data.mainLevelChunks.erase(packedPos);
+
+    if (global != 0) {
+        auto it = data.globalChunkShapes.find(packedPos);
+        if (it != data.globalChunkShapes.end()) {
+            destroyChunkShapes(it->second);
+            data.globalChunkShapes.erase(it);
+        }
+        return;
+    }
+
+    // Как и в Rust-версии, для sub-level объектов removeChunk по конкретному
+    // object_id не поддерживается (сигнатура не передаёт object_id) —
+    // объектные чанки чистятся целиком при уничтожении самого объекта
+    // (removeSublevel), где b3DestroyBody сам уберёт все шейпы.
 }
 
 // =======================

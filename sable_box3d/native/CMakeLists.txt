@@ -12,7 +12,7 @@ include(UseJava)
 # --- JNI native library ---
 add_library(box3d_jni SHARED
     box3d_jni.cpp
- "sublevel_octree.cpp")
+ )
 
 target_include_directories(box3d_jni PRIVATE
     ${JNI_INCLUDE_DIRS}

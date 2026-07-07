@@ -121,7 +121,7 @@ public class Box3dPhysicsPipeline implements PhysicsPipeline {
         final Vector3dc pos = pose.position();
         final Quaterniondc rot = pose.orientation();
 
-        final long body = Box3dJNI.createSublevel(this.worldHandle, new float[]{(float) pos.x(), (float) pos.y(), (float) pos.z(), (float) rot.x(), (float) rot.y(), (float) rot.z(), (float) rot.w()});
+        final long body = Box3dJNI.createSublevel(this.worldHandle, subLevel.getRuntimeId(), new float[]{(float) pos.x(), (float) pos.y(), (float) pos.z(), (float) rot.x(), (float) rot.y(), (float) rot.z(), (float) rot.w()});
         this.addBodyID(subLevel.getRuntimeId(), body);
 
         subLevel.updateMergedMassData(1.0f);
@@ -141,7 +141,7 @@ public class Box3dPhysicsPipeline implements PhysicsPipeline {
      */
     @Override
     public void remove(final ServerSubLevel subLevel) {
-        Box3dJNI.removeSubLevel(this.getBodyID(subLevel.getRuntimeId()));
+        Box3dJNI.removeSubLevel(this.worldHandle, subLevel.getRuntimeId());
         this.activeSubLevels.remove(subLevel.getRuntimeId());
     }
 

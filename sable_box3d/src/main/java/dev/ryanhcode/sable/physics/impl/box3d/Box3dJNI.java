@@ -95,8 +95,8 @@ public final class Box3dJNI {
     public static native void worldDestroy(long worldHandle);
     public static native void worldStep(long worldHandle, float dt, int substeps);
 
-    public static native long createSublevel(long worldHandle, float[] pose);
-    public static native void removeSubLevel(long body);
+    public static native long createSublevel(long worldHandle, int id, float[] pose);
+    public static native void removeSubLevel(long worldHandle, int id);
 
     /**
      * All poses are formatted in a double array as:
