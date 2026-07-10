@@ -14,6 +14,7 @@ public final class Box3dJNI {
     public static final String NATIVE_NAME = getNativeName();
     private static final Path NATIVE_DIR = resolveNativeDir();
     private static final String LIB_ZIP_NAME = "box3d_binaries.zip.l4z";
+    private static int countingObjectID = 0;
 
     private static String getNativeName() {
 
@@ -91,12 +92,20 @@ public final class Box3dJNI {
         }
     }
 
+    @ApiStatus.Internal
+    public static synchronized int nextBodyID() {
+        return countingObjectID++;
+    }
+
     public static native long worldCreate(float gx, float gy, float gz);
     public static native void worldDestroy(long worldHandle);
     public static native void worldStep(long worldHandle, float dt, int substeps);
 
-    public static native long createSublevel(long worldHandle, int id, float[] pose);
+    public static native long createSublevel(long worldHandle, int id, double[] pose);
     public static native void removeSubLevel(long worldHandle, int id);
+
+    public static native void addChunk(long worldHandle, int x, int y, int z, int[] data, boolean global, int objectId);
+    public static native void removeChunk(long worldHandle, int x, int y, int z, boolean global);
 
     /**
      * All poses are formatted in a double array as:

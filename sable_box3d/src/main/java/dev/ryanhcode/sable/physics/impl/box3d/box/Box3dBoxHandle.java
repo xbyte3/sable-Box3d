@@ -13,6 +13,7 @@ public record Box3dBoxHandle(long world, long body, float[] poseCache) implement
         final Vector3dc pos = pose.position();
         final Quaterniondc rot = pose.orientation();
 
+        final int id = Box3dJNI.nextBodyID();
         final long bodyHandle = Box3dJNI.createBox(worldHandle, mass, (float) halfExtents.x(), (float) halfExtents.y(), (float) halfExtents.z(), new float[]{(float) pos.x(), (float) pos.y(), (float) pos.z(), (float) rot.x(), (float) rot.y(), (float) rot.z(), (float) rot.w()});
         return new Box3dBoxHandle(worldHandle, bodyHandle, new float[7]);
     }

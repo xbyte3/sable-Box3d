@@ -268,7 +268,7 @@ Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_getPose
 }
 
 JNIEXPORT jlong JNICALL
-Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_createSublevel
+Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_createSubLevel
 (JNIEnv* env, jclass, jlong world, jint id, jdoubleArray pose)
 {
     b3BodyDef def = b3DefaultBodyDef();
@@ -299,10 +299,19 @@ Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_createSublevel
 }
 
 JNIEXPORT void JNICALL
-Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_removeSublevel
-(JNIEnv* env, jclass, jlong body)
+Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_removeSubLevel
+(JNIEnv* env, jclass, jlong world, jint id)
 {
-    b3DestroyBody(toBody(body));
+    WorldData& data = getWorldData(world);
+        
+    auto it = data.bodies.find((LevelColliderID)id);
+    if (it == data.bodies.end()) {
+        return;
+    }
+
+    b3DestroyBody(it->second); // уничтожает и все чанк-шейпы объекта
+    data.bodies.erase(it);
+    data.objectChunkShapes.erase((LevelColliderID)id);
 }
 
 JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_addChunk(

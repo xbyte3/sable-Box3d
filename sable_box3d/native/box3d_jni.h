@@ -19,13 +19,13 @@ JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_worl
 // BODY
 
 JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_getPose
-    (JNIEnv* env, jclass, jlong bodyHandle, jfloatArray outArray);
+    (JNIEnv* env, jclass, jlong bodyHandle, jdoubleArray outArray);
 
-JNIEXPORT jlong JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_createSublevel
+JNIEXPORT jlong JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_createSubLevel
     (JNIEnv*, jclass, jlong world, jfloatArray pose);
 
-JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_removeSublevel
-    (JNIEnv*, jclass, jlong body);
+JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_removeSubLevel
+    (JNIEnv*, jclass, jlong world, jint id);
 
 JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_addChunk
     (JNIEnv*, jclass, jlong world, jint x, jint y, jint z, jintArray data, jboolean global, jint object_id);
