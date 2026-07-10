@@ -22,7 +22,7 @@ JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_getP
     (JNIEnv* env, jclass, jlong bodyHandle, jdoubleArray outArray);
 
 JNIEXPORT jlong JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_createSubLevel
-    (JNIEnv*, jclass, jlong world, jfloatArray pose);
+    (JNIEnv*, jclass, jlong world, jint id, jdoubleArray pose);
 
 JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_removeSubLevel
     (JNIEnv*, jclass, jlong world, jint id);

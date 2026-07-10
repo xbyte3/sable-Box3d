@@ -7,7 +7,6 @@ import org.jetbrains.annotations.ApiStatus;
 
 import java.nio.file.*;
 import java.io.*;
-import java.util.HashMap;
 import java.util.zip.*;
 
 public final class Box3dJNI {
@@ -101,7 +100,7 @@ public final class Box3dJNI {
     public static native void worldDestroy(long worldHandle);
     public static native void worldStep(long worldHandle, float dt, int substeps);
 
-    public static native long createSublevel(long worldHandle, int id, double[] pose);
+    public static native long createSubLevel(long worldHandle, int id, double[] pose);
     public static native void removeSubLevel(long worldHandle, int id);
 
     public static native void addChunk(long worldHandle, int x, int y, int z, int[] data, boolean global, int objectId);

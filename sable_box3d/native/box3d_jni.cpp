@@ -192,6 +192,11 @@ static inline WorldData& getWorldData(jlong worldHandle)
     return worldData.at((uint32_t)worldHandle);
 }
 
+static inline WorldData& getOrCreateWorldData(jlong worldHandle)
+{
+    return worldData.try_emplace((uint32_t)worldHandle).first->second;
+}
+
 // =======================
 // BODY 64bit!!
 // =======================
@@ -212,17 +217,29 @@ static inline jlong fromBody(b3BodyId id)
 
 JNIEXPORT jlong JNICALL
 Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_worldCreate
-(JNIEnv*, jclass, jfloat gx, jfloat gy, jfloat gz)
+(JNIEnv* env, jclass, jfloat gx, jfloat gy, jfloat gz)
 {
     b3WorldDef def = b3DefaultWorldDef();
     def.gravity = { gx, gy, gz };
     jlong worldHandle = fromWorld(b3CreateWorldDoublePrecision(&def));
+    try
+    {
+        WorldData& data = getOrCreateWorldData(worldHandle);
 
-    WorldData& data = getWorldData(worldHandle);
+        b3BodyDef levelBodyDef = b3DefaultBodyDef();
+        levelBodyDef.type = b3_staticBody;
+        data.levelBody = b3CreateBody(toWorld(worldHandle), &levelBodyDef);
+    }
+    catch (const std::exception& e)
+    {
+        printf("%s\n", e.what());
+        fflush(stdout);
 
-    b3BodyDef levelBodyDef = b3DefaultBodyDef();
-    levelBodyDef.type = b3_staticBody;
-    data.levelBody = b3CreateBody(toWorld(worldHandle), &levelBodyDef);
+        jclass cls = env->FindClass("java/lang/RuntimeException");
+        env->ThrowNew(cls, e.what());
+        return 0;
+    }
+    
 
     return worldHandle;
 }
@@ -231,7 +248,12 @@ JNIEXPORT void JNICALL
 Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_worldDestroy
 (JNIEnv*, jclass, jlong world)
 {
-    b3DestroyWorld(toWorld(world)); // look at this later
+    auto it = worldData.find((uint32_t)world);
+    if (it != worldData.end()) {
+        worldData.erase(it);
+    }
+
+    b3DestroyWorld(toWorld(world));
 }
 
 JNIEXPORT void JNICALL

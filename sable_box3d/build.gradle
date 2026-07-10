@@ -116,9 +116,6 @@ tasks.register("buildBox3dNative", Exec) {
 }
 
 tasks.register("packageBox3dNative") {
-
-    //dependsOn "buildBox3dNative"
-
     doLast {
 
         def target = [
@@ -130,7 +127,7 @@ tasks.register("packageBox3dNative") {
         def output = file("src/main/resources/natives/box3d/box3d_binaries.zip.l4z")
         output.parentFile.mkdirs()
 
-        def nativeFile = file("./native/build/Release/box3d_jni.dll")
+        def nativeFile = file("./native/build/Debug/box3d_jni.dll")
         if (!nativeFile.exists()) {
             throw new GradleException("Native binary not found: " + nativeFile)
         }

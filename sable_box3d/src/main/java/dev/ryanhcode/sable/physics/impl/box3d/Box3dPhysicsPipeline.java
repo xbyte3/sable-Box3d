@@ -11,7 +11,6 @@ import dev.ryanhcode.sable.api.sublevel.KinematicContraption;
 import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
 import dev.ryanhcode.sable.companion.math.Pose3d;
 import dev.ryanhcode.sable.companion.math.Pose3dc;
-import dev.ryanhcode.sable.physics.impl.box3d.box.Box3dBoxHandle;
 import dev.ryanhcode.sable.physics.impl.box3d.collider.Box3dBlockColliderData;
 import dev.ryanhcode.sable.physics.impl.box3d.collider.Box3dColliderBakery;
 import dev.ryanhcode.sable.sublevel.ServerSubLevel;
@@ -25,11 +24,11 @@ import it.unimi.dsi.fastutil.objects.ReferenceList;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunkSection;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.jetbrains.annotations.ApiStatus;
 import org.joml.Quaterniondc;
 import org.joml.Vector3d;
 import org.joml.Vector3dc;
@@ -124,7 +123,7 @@ public class Box3dPhysicsPipeline implements PhysicsPipeline {
         final Vector3dc pos = pose.position();
         final Quaterniondc rot = pose.orientation();
 
-        final long body = Box3dJNI.createSublevel(this.worldHandle, subLevel.getRuntimeId(), new double[]{pos.x(), pos.y(), pos.z(), rot.x(), rot.y(), rot.z(), rot.w()});
+        final long body = Box3dJNI.createSubLevel(this.worldHandle, subLevel.getRuntimeId(), new double[]{pos.x(), pos.y(), pos.z(), rot.x(), rot.y(), rot.z(), rot.w()});
         this.addBodyID(subLevel.getRuntimeId(), body);
 
         subLevel.updateMergedMassData(1.0f);
@@ -206,17 +205,20 @@ public class Box3dPhysicsPipeline implements PhysicsPipeline {
                 for (int bz = 0; bz < 16; bz++) {
                     for (int by = 0; by < 16; by++) {
                         final BlockPos globalPos = new BlockPos(bx, by, bz).offset(sectionPos.minBlockX(), sectionPos.minBlockY(), sectionPos.minBlockZ());
-                        final BlockState blockState = this.accelerator.getBlockState(globalPos);
+                        final BlockState blockState = Blocks.AIR.defaultBlockState();//this.accelerator.getBlockState(globalPos);
 
                         // В отличие от Rapier-пути, Box3dColliderBakery не регистрирует
                         // коллайдеры по индексу (нет аналога Rapier3D.newVoxelCollider) —
                         // он просто печёт per-blockstate геометрию по требованию. Пока
                         // C++ сторона (createChunkShapes) не поддерживает per-block
                         // friction/restitution, нам нужен только факт "есть ли коллизия".
-                        final Box3dBlockColliderData colliderData = this.colliderBakery.get(blockState);
+                        //final Box3dBlockColliderData colliderData = this.colliderBakery.get(blockState);
 
                         final int index = bx + (bz << 4) + (by << 8);
-                        array[index] = packBlockState(colliderData);
+                        //array[index] = packBlockState(colliderData);
+
+                        final Box3dBlockColliderData colliderData = null;
+                        array[index] = 0;
                     }
                 }
             }
@@ -230,7 +232,7 @@ public class Box3dPhysicsPipeline implements PhysicsPipeline {
             id = ((ServerSubLevel) plot.getSubLevel()).getRuntimeId();
         }
 
-        Box3dJNI.addChunk(this.worldHandle, x, y, z, array, global, id);
+        //Box3dJNI.addChunk(this.worldHandle, x, y, z, array, global, id);
     }
 
     /**
