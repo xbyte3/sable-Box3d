@@ -293,31 +293,250 @@ JNIEXPORT jlong JNICALL
 Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_createSubLevel
 (JNIEnv* env, jclass, jlong world, jint id, jdoubleArray pose)
 {
-    b3BodyDef def = b3DefaultBodyDef();
-    def.type = b3_dynamicBody;
+    try
+    {
+        printf("[createSubLevel] begin world=%lld id=%d pose=%p\n",
+            (long long)world,
+            id,
+            pose);
 
-    jdouble* elements = env->GetDoubleArrayElements(pose, nullptr);
-    def.position = { elements[0], elements[1], elements[2] };
-    def.rotation = { (float)elements[3], (float)elements[4], (float)elements[5], (float)elements[6] };
-    env->ReleaseDoubleArrayElements(pose, elements, JNI_ABORT);
+        fflush(stdout);
 
-    b3BodyId body = b3CreateBody(toWorld(world), &def);
 
-    b3ShapeDef shapeDef = b3DefaultShapeDef();
-    b3BoxHull box = b3MakeBoxHull(1, 1, 1);
+        // =========================
+        // WORLD CHECK
+        // =========================
 
-    b3CreateHullShape( body, &shapeDef, &box.base );
+        if (world == 0)
+        {
+            throw std::runtime_error("createSubLevel: world handle is zero");
+        }
 
-    b3MassData myMassData;
-    myMassData.mass = 1.0f;
-    myMassData.center = {0.0f, 0.0f, 0.0f};
-    myMassData.inertia = b3Mat3_identity;
-    b3Body_SetMassData(body, myMassData);
+        auto worldIt = worldData.find((uint32_t)world);
+        if (worldIt == worldData.end())
+        {
+            throw std::runtime_error("createSubLevel: worldData not found");
+        }
 
-    WorldData& data = getWorldData(world);
-    data.bodies[(LevelColliderID)id] = body;
+        b3WorldId worldId = toWorld(world);
 
-    return fromBody(body);
+        if (!b3World_IsValid(worldId))
+        {
+            throw std::runtime_error("createSubLevel: invalid b3WorldId");
+        }
+
+
+        // =========================
+        // POSE CHECK
+        // =========================
+
+        if (pose == nullptr)
+        {
+            throw std::runtime_error("createSubLevel: pose is null");
+        }
+
+        jsize poseLength = env->GetArrayLength(pose);
+
+        printf("[createSubLevel] pose length=%d\n", poseLength);
+
+        if (poseLength < 7)
+        {
+            throw std::runtime_error("createSubLevel: pose length < 7");
+        }
+
+
+        jdouble* elements = env->GetDoubleArrayElements(pose, nullptr);
+
+        if (elements == nullptr)
+        {
+            throw std::runtime_error("createSubLevel: GetDoubleArrayElements failed");
+        }
+
+
+        printf(
+            "[createSubLevel] pose: %.3f %.3f %.3f %.3f %.3f %.3f %.3f\n",
+            elements[0],
+            elements[1],
+            elements[2],
+            elements[3],
+            elements[4],
+            elements[5],
+            elements[6]
+        );
+
+
+        // =========================
+        // CREATE BODY
+        // =========================
+
+        b3BodyDef def = b3DefaultBodyDef();
+
+        def.type = b3_dynamicBody;
+
+        def.position = {
+            (float)elements[0],
+            (float)elements[1],
+            (float)elements[2]
+        };
+
+        def.rotation = {
+            (float)elements[3],
+            (float)elements[4],
+            (float)elements[5],
+            (float)elements[6]
+        };
+
+
+        env->ReleaseDoubleArrayElements(
+            pose,
+            elements,
+            JNI_ABORT
+        );
+
+
+        printf("[createSubLevel] creating body\n");
+        fflush(stdout);
+
+
+        b3BodyId body = b3CreateBody(worldId, &def);
+
+
+        printf("[createSubLevel] body index=%u generation=%u\n",
+            body.index1,
+            body.generation);
+
+        fflush(stdout);
+
+
+        if (!b3Body_IsValid(body))
+        {
+            throw std::runtime_error("createSubLevel: created body is invalid");
+        }
+
+
+        // =========================
+        // CREATE SHAPE
+        // =========================
+
+        printf("[createSubLevel] creating shape\n");
+        fflush(stdout);
+
+
+        b3ShapeDef shapeDef = b3DefaultShapeDef();
+
+        b3BoxHull box = b3MakeBoxHull(
+            1.0f,
+            1.0f,
+            1.0f
+        );
+
+
+        b3ShapeId shape = b3CreateHullShape(
+            body,
+            &shapeDef,
+            &box.base
+        );
+
+
+        printf("[createSubLevel] shape index=%u generation=%u\n",
+            shape.index1,
+            shape.generation);
+
+        fflush(stdout);
+
+
+        if (!b3Shape_IsValid(shape))
+        {
+            throw std::runtime_error("createSubLevel: created shape is invalid");
+        }
+
+
+        // =========================
+        // MASS
+        // =========================
+
+        printf("[createSubLevel] setting mass\n");
+        fflush(stdout);
+
+
+        b3MassData massData;
+
+        massData.mass = 1.0f;
+        massData.center = {
+            0.0f,
+            0.0f,
+            0.0f
+        };
+        massData.inertia = b3Mat3_identity;
+
+
+        b3Body_SetMassData(
+            body,
+            massData
+        );
+
+
+        // =========================
+        // STORE
+        // =========================
+
+        WorldData& data = worldIt->second;
+
+
+        auto existing = data.bodies.find((LevelColliderID)id);
+
+        if (existing != data.bodies.end())
+        {
+            printf(
+                "[createSubLevel] WARNING: replacing existing body id=%d\n",
+                id
+            );
+
+            if (b3Body_IsValid(existing->second))
+            {
+                b3DestroyBody(existing->second);
+            }
+        }
+
+
+        data.bodies[(LevelColliderID)id] = body;
+
+
+        printf(
+            "[createSubLevel] success id=%d handle=%lld\n",
+            id,
+            (long long)fromBody(body)
+        );
+
+        fflush(stdout);
+
+
+        return fromBody(body);
+    }
+    catch (const std::exception& e)
+    {
+        printf(
+            "[createSubLevel] ERROR: %s\n",
+            e.what()
+        );
+
+        fflush(stdout);
+
+
+        jclass cls = env->FindClass(
+            "java/lang/RuntimeException"
+        );
+
+        if (cls)
+        {
+            env->ThrowNew(
+                cls,
+                e.what()
+            );
+        }
+
+        return 0;
+    }
 }
 
 JNIEXPORT void JNICALL

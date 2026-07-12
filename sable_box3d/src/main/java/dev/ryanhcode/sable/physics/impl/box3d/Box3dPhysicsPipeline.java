@@ -43,7 +43,7 @@ public class Box3dPhysicsPipeline implements PhysicsPipeline {
     private final Int2ObjectMap<ServerSubLevel> activeSubLevels = new Int2ObjectArrayMap<>();
     private final ReferenceList<PhysicsPipelineBody> queuedWakeUps = new ReferenceArrayList<>();
     private long worldHandle = 0;  // JNI handle
-    private final float[] poseCache;
+    private final double[] poseCache;
     private final Box3dColliderBakery colliderBakery;
     private static int nextBodyID = 0;
     private final Map<Integer, Long> bodies = new HashMap<>();  // ID -> JNI body handle
@@ -55,7 +55,7 @@ public class Box3dPhysicsPipeline implements PhysicsPipeline {
         this.accelerator = new LevelAccelerator(level);
         this.colliderBakery = new Box3dColliderBakery(this.accelerator);
         this.recentCollisions.defaultReturnValue(-1);
-        this.poseCache = new float[7];
+        this.poseCache = new double[7];
     }
 
     public long getBodyID(final int id) {
@@ -205,20 +205,20 @@ public class Box3dPhysicsPipeline implements PhysicsPipeline {
                 for (int bz = 0; bz < 16; bz++) {
                     for (int by = 0; by < 16; by++) {
                         final BlockPos globalPos = new BlockPos(bx, by, bz).offset(sectionPos.minBlockX(), sectionPos.minBlockY(), sectionPos.minBlockZ());
-                        final BlockState blockState = Blocks.AIR.defaultBlockState();//this.accelerator.getBlockState(globalPos);
+                        final BlockState blockState = this.accelerator.getBlockState(globalPos);
 
                         // В отличие от Rapier-пути, Box3dColliderBakery не регистрирует
                         // коллайдеры по индексу (нет аналога Rapier3D.newVoxelCollider) —
                         // он просто печёт per-blockstate геометрию по требованию. Пока
                         // C++ сторона (createChunkShapes) не поддерживает per-block
                         // friction/restitution, нам нужен только факт "есть ли коллизия".
-                        //final Box3dBlockColliderData colliderData = this.colliderBakery.get(blockState);
+                        final Box3dBlockColliderData colliderData = this.colliderBakery.get(blockState);
 
                         final int index = bx + (bz << 4) + (by << 8);
-                        //array[index] = packBlockState(colliderData);
+                        array[index] = packBlockState(colliderData);
 
-                        final Box3dBlockColliderData colliderData = null;
-                        array[index] = 0;
+                        //final Box3dBlockColliderData colliderData = null;
+                        //array[index] = 0;
                     }
                 }
             }
@@ -232,7 +232,7 @@ public class Box3dPhysicsPipeline implements PhysicsPipeline {
             id = ((ServerSubLevel) plot.getSubLevel()).getRuntimeId();
         }
 
-        //Box3dJNI.addChunk(this.worldHandle, x, y, z, array, global, id);
+        Box3dJNI.addChunk(this.worldHandle, x, y, z, array, global, id);
     }
 
     /**

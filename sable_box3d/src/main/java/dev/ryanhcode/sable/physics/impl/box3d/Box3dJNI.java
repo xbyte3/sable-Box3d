@@ -123,7 +123,7 @@ public final class Box3dJNI {
      * @param store The array to store pose of the body in the format [x, y, z, qx, qy, qz, qw]
      */
     @ApiStatus.Internal
-    public static native void getPose(final long body, float[] store);
+    public static native void getPose(final long body, double[] store);
 
     /**
      * "Wakes up" an object, indicating environmental or other changes have occurred that should resume physics if idled or sleeping
