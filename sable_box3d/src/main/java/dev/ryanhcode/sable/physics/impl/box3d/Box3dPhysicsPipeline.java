@@ -258,22 +258,24 @@ public class Box3dPhysicsPipeline implements PhysicsPipeline {
 
         final BlockPos globalBlockPos = new BlockPos(x, y, z);
 
+        // Соседние блоки могут сменить VoxelNeighborhoodState (Face/Edge/Corner/
+        // Interior) при изменении этого блока — их коллизию тоже нужно обновить,
+        // как и в Rapier-версии.
         for (final Direction dir : Direction.values()) {
-            final BlockPos pos = globalBlockPos.relative(dir);
-            final VoxelNeighborhoodState state = VoxelNeighborhoodState.getState(this.accelerator, pos, null);
-            final BlockState blockState = this.accelerator.getBlockState(pos);
-            final RapierVoxelColliderData colliderData = this.colliderBakery.getPhysicsDataForBlock(this.level.getBlockState(pos));
-
-            //final int colliderValue = colliderData == null ? 0 : colliderData.handle() + 1;
-            Box3dJNI.changeBlock(this.worldHandle, pos.getX(), pos.getY(), pos.getZ(), packBlockState(colliderData));
+            this.updateBlockPhysics(globalBlockPos.relative(dir));
         }
 
-        // do it for the block without offset
-        final VoxelNeighborhoodState state = VoxelNeighborhoodState.getState(this.accelerator, globalBlockPos, null);
-        final RapierVoxelColliderData colliderData = this.colliderBakery.getPhysicsDataForBlock(newState);
+        this.updateBlockPhysics(globalBlockPos);
+    }
 
-        final int colliderValue = colliderData == null ? 0 : colliderData.handle() + 1;
-        Box3dJNI.changeBlock(this.scene.handle(), x, y, z, packBlockState(state, colliderValue));
+    private void updateBlockPhysics(final BlockPos pos) {
+        final VoxelNeighborhoodState state = VoxelNeighborhoodState.getState(this.accelerator, pos, null);
+        final BlockState blockState = this.accelerator.getBlockState(pos);
+        final Box3dBlockColliderData colliderData = this.colliderBakery.get(blockState);
+
+        final int colliderId = colliderData == null ? 0 : colliderData.handle() + 1;
+
+        Box3dJNI.changeBlock(this.worldHandle, pos.getX(), pos.getY(), pos.getZ(), packBlockState(state, colliderId));
     }
 
     @Override

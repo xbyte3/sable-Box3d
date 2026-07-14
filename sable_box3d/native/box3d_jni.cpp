@@ -29,6 +29,24 @@ struct BlockState {
 
 #include <mutex>
 
+struct BlockKey
+{
+    int32_t x, y, z;
+    bool operator==(const BlockKey& other) const {
+        return x == other.x && y == other.y && z == other.z;
+    }
+};
+
+struct BlockKeyHash
+{
+    size_t operator()(const BlockKey& k) const noexcept {
+        size_t h = std::hash<int32_t>()(k.x);
+        h ^= std::hash<int32_t>()(k.y) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= std::hash<int32_t>()(k.z) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        return h;
+    }
+};
+
 struct VoxelColliderBox
 {
     float minX, minY, minZ, maxX, maxY, maxZ;
@@ -110,7 +128,7 @@ struct WorldData {
 
     // Шейпы, созданные для каждого чанка глобального уровня, чтобы их можно
     // было удалить/пересоздать в addChunk/removeChunk без утечек.
-    std::unordered_map<int64_t, std::vector<b3ShapeId>> globalChunkShapes;
+    std::unordered_map<BlockKey, std::vector<b3ShapeId>, BlockKeyHash> globalBlockShapes;
 
     // То же самое, но для чанков, принадлежащих конкретному sub-level объекту
     // (object_id). При удалении самого объекта (removeSublevel) тело
@@ -153,68 +171,42 @@ static inline bool isSolidBlock(const BlockState& state)
     return data != nullptr && !data->isFluid && !data->collisionBoxes.empty();
 }
 
-// Создаёт box-шейпы для всех твёрдых блоков чанка на заданном теле.
-// chunkOriginBlockX/Y/Z — координата блока (0,0,0) чанка в локальном
-// пространстве тела.
-static std::vector<b3ShapeId> createChunkShapes(
+// Создаёт шейп(ы) для одного солидного блока по его глобальным блок-координатам.
+static std::vector<b3ShapeId> createBlockShapes(
     b3BodyId body,
-    const ChunkSection& chunk,
-    int32_t chunkOriginBlockX,
-    int32_t chunkOriginBlockY,
-    int32_t chunkOriginBlockZ)
+    const VoxelColliderData& colliderData,
+    int32_t blockX, int32_t blockY, int32_t blockZ)
 {
     std::vector<b3ShapeId> shapes;
-    shapes.reserve(64);
+    shapes.reserve(colliderData.collisionBoxes.size());
 
-    for (int bx = 0; bx < CHUNK_SIZE; bx++) {
-        for (int by = 0; by < CHUNK_SIZE; by++) {
-            for (int bz = 0; bz < CHUNK_SIZE; bz++) {
-                BlockState state = chunk.get_block(bx, by, bz);
-                if (!isSolidBlock(state)) {
-                    continue;
-                }
+    b3ShapeDef shapeDef = b3DefaultShapeDef();
+    shapeDef.baseMaterial.friction = colliderData.friction;
+    shapeDef.baseMaterial.restitution = colliderData.restitution;
+    shapeDef.density = 0.0f;
+    shapeDef.updateBodyMass = false;
 
-                const VoxelColliderData* colliderData = getVoxelColliderData(state.block_collider_id);
-                // isSolidBlock уже гарантирует colliderData != nullptr && !collisionBoxes.empty()
+    for (const VoxelColliderBox& box : colliderData.collisionBoxes) {
+        float hx = (box.maxX - box.minX) * 0.5f;
+        float hy = (box.maxY - box.minY) * 0.5f;
+        float hz = (box.maxZ - box.minZ) * 0.5f;
 
-                b3ShapeDef shapeDef = b3DefaultShapeDef();
-                shapeDef.baseMaterial.friction = colliderData->friction;
-                shapeDef.baseMaterial.restitution = colliderData->restitution;
-                shapeDef.density = 0.0f;
-                shapeDef.updateBodyMass = false;
-
-                float originX = (float)(chunkOriginBlockX + bx);
-                float originY = (float)(chunkOriginBlockY + by);
-                float originZ = (float)(chunkOriginBlockZ + bz);
-
-                for (const VoxelColliderBox& box : colliderData->collisionBoxes) {
-                    float hx = (box.maxX - box.minX) * 0.5f;
-                    float hy = (box.maxY - box.minY) * 0.5f;
-                    float hz = (box.maxZ - box.minZ) * 0.5f;
-
-                    // Защита от вырожденных боксов — именно такой случай
-                    // раньше приводил к "area > 0.0f" assert в hull.c.
-                    if (hx <= 0.0f || hy <= 0.0f || hz <= 0.0f) {
-                        continue;
-                    }
-
-                    b3BoxHull hull = b3MakeBoxHull(hx, hy, hz);
-
-                    b3Transform transform;
-                    transform.q = b3Quat_identity;
-                    transform.p = {
-                        originX + (box.minX + box.maxX) * 0.5f,
-                        originY + (box.minY + box.maxY) * 0.5f,
-                        originZ + (box.minZ + box.maxZ) * 0.5f,
-                    };
-
-                    b3ShapeId shape = b3CreateTransformedHullShape(
-                        body, &shapeDef, &hull.base, transform, { 1.0f, 1.0f, 1.0f });
-
-                    shapes.push_back(shape);
-                }
-            }
+        // Защита от вырожденных боксов (источник прошлого "area > 0.0f" assert'а).
+        if (hx <= 0.0f || hy <= 0.0f || hz <= 0.0f) {
+            continue;
         }
+
+        b3BoxHull hull = b3MakeBoxHull(hx, hy, hz);
+
+        b3Transform transform;
+        transform.q = b3Quat_identity;
+        transform.p = {
+            (float)blockX + (box.minX + box.maxX) * 0.5f,
+            (float)blockY + (box.minY + box.maxY) * 0.5f,
+            (float)blockZ + (box.minZ + box.maxZ) * 0.5f,
+        };
+
+        shapes.push_back(b3CreateTransformedHullShape(body, &shapeDef, &hull.base, transform, { 1.0f, 1.0f, 1.0f }));
     }
 
     return shapes;
@@ -695,17 +687,39 @@ JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_addC
     const ChunkSection& storedChunk = data.mainLevelChunks.at(packedPos);
 
     if (global != 0) {
-        std::vector<b3ShapeId>& shapes = data.globalChunkShapes[packedPos];
-        destroyChunkShapes(shapes);
+        for (int bx = 0; bx < CHUNK_SIZE; bx++) {
+            for (int by = 0; by < CHUNK_SIZE; by++) {
+                for (int bz = 0; bz < CHUNK_SIZE; bz++) {
+                    BlockState blockState = storedChunk.get_block(bx, by, bz);
 
-        shapes = createChunkShapes(
-            data.levelBody, storedChunk,
-            x << CHUNK_SHIFT, y << CHUNK_SHIFT, z << CHUNK_SHIFT);
+                    int32_t worldX = (x << CHUNK_SHIFT) + bx;
+                    int32_t worldY = (y << CHUNK_SHIFT) + by;
+                    int32_t worldZ = (z << CHUNK_SHIFT) + bz;
+                    BlockKey key{ worldX, worldY, worldZ };
 
+                    // На случай повторной отправки того же чанка — снести старые шейпы блока перед пересозданием.
+                    auto existing = data.globalBlockShapes.find(key);
+                    if (existing != data.globalBlockShapes.end()) {
+                        destroyChunkShapes(existing->second);
+                        data.globalBlockShapes.erase(existing);
+                    }
+
+                    if (!isSolidBlock(blockState)) {
+                        continue;
+                    }
+
+                    const VoxelColliderData* colliderData = getVoxelColliderData(blockState.block_collider_id);
+                    std::vector<b3ShapeId> shapes = createBlockShapes(data.levelBody, *colliderData, worldX, worldY, worldZ);
+                    if (!shapes.empty()) {
+                        data.globalBlockShapes.emplace(key, std::move(shapes));
+                    }
+                }
+            }
+        }
         return;
     }
 
-    if (object_id == -1) {
+    /*if (object_id == -1) { TODO: Fix it with using new function createChunkShapes.
         return;
     }
 
@@ -716,7 +730,7 @@ JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_addC
 
     shapes = createChunkShapes(
         objectBody, storedChunk,
-        x << CHUNK_SHIFT, y << CHUNK_SHIFT, z << CHUNK_SHIFT);
+        x << CHUNK_SHIFT, y << CHUNK_SHIFT, z << CHUNK_SHIFT);*/
 }
 
 JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_removeChunk(
@@ -728,10 +742,22 @@ JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_remo
     data.mainLevelChunks.erase(packedPos);
 
     if (global != 0) {
-        auto it = data.globalChunkShapes.find(packedPos);
-        if (it != data.globalChunkShapes.end()) {
-            destroyChunkShapes(it->second);
-            data.globalChunkShapes.erase(it);
+        for (int bx = 0; bx < CHUNK_SIZE; bx++) {
+            for (int by = 0; by < CHUNK_SIZE; by++) {
+                for (int bz = 0; bz < CHUNK_SIZE; bz++) {
+                    BlockKey key{
+                        (x << CHUNK_SHIFT) + bx,
+                        (y << CHUNK_SHIFT) + by,
+                        (z << CHUNK_SHIFT) + bz
+                    };
+
+                    auto it = data.globalBlockShapes.find(key);
+                    if (it != data.globalBlockShapes.end()) {
+                        destroyChunkShapes(it->second);
+                        data.globalBlockShapes.erase(it);
+                    }
+                }
+            }
         }
         return;
     }
@@ -740,6 +766,48 @@ JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_remo
     // object_id не поддерживается (сигнатура не передаёт object_id) —
     // объектные чанки чистятся целиком при уничтожении самого объекта
     // (removeSublevel), где b3DestroyBody сам уберёт все шейпы.
+}
+
+JNIEXPORT void JNICALL
+Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_changeBlock
+(JNIEnv*, jclass, jlong worldHandle, jint x, jint y, jint z, jint packedBlock)
+{
+    WorldData& data = getWorldData(worldHandle);
+
+    uint32_t packed = (uint32_t)packedBlock;
+    uint16_t blockColliderId = packed >> 16;
+    uint16_t voxelStateId = packed & 0xFFFF;
+    if (voxelStateId >= 5) {
+        voxelStateId = 0;
+    }
+
+    BlockState blockState{ (uint32_t)blockColliderId, ALL_VOXEL_PHYSICS_STATES[voxelStateId] };
+
+    // Обновляем сырые данные чанка, если он загружен (аналог chunk.set_block из Rapier).
+    int64_t chunkPos = packSectionPosition(x >> CHUNK_SHIFT, y >> CHUNK_SHIFT, z >> CHUNK_SHIFT);
+    auto chunkIt = data.mainLevelChunks.find(chunkPos);
+    if (chunkIt != data.mainLevelChunks.end()) {
+        chunkIt->second.set_block(x & (CHUNK_SIZE - 1), y & (CHUNK_SIZE - 1), z & (CHUNK_SIZE - 1), blockState);
+    }
+
+    BlockKey key{ x, y, z };
+
+    // Всегда сносим старый шейп блока перед пересозданием.
+    auto shapeIt = data.globalBlockShapes.find(key);
+    if (shapeIt != data.globalBlockShapes.end()) {
+        destroyChunkShapes(shapeIt->second);
+        data.globalBlockShapes.erase(shapeIt);
+    }
+
+    if (!isSolidBlock(blockState)) {
+        return;
+    }
+
+    const VoxelColliderData* colliderData = getVoxelColliderData(blockState.block_collider_id);
+    std::vector<b3ShapeId> shapes = createBlockShapes(data.levelBody, *colliderData, x, y, z);
+    if (!shapes.empty()) {
+        data.globalBlockShapes.emplace(key, std::move(shapes));
+    }
 }
 
 // =======================

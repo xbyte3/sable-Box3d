@@ -42,6 +42,9 @@ JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_addC
 JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_removeChunk
     (JNIEnv*, jclass, jlong world, jint x, jint y, jint z, jboolean global);
 
+JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_changeBlock
+(JNIEnv*, jclass, jlong world, jint x, jint y, jint z, jint packedBlock);
+
 // SHAPE
 JNIEXPORT jlong JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_createBox
     (JNIEnv*, jclass, jlong world, jfloat mass, jfloat hx, jfloat hy, jfloat hz, jfloatArray pose);

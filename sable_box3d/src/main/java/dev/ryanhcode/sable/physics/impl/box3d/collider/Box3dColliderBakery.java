@@ -4,6 +4,7 @@ import dev.ryanhcode.sable.api.block.BlockSubLevelCollisionShape;
 import dev.ryanhcode.sable.api.physics.collider.SableCollisionContext;
 import dev.ryanhcode.sable.physics.chunk.VoxelNeighborhoodState;
 import dev.ryanhcode.sable.physics.config.block_properties.PhysicsBlockPropertyHelper;
+import dev.ryanhcode.sable.physics.impl.box3d.Box3dJNI;
 import net.minecraft.Util;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.BlockGetter;
@@ -30,7 +31,7 @@ public class Box3dColliderBakery {
         return this.level;
     }
 
-    private Box3dBlockColliderData build(BlockState state) {
+     private Box3dBlockColliderData build(BlockState state) {
 
         boolean liquid = VoxelNeighborhoodState.isLiquid(state);
 
@@ -47,6 +48,7 @@ public class Box3dColliderBakery {
 
         if (liquid) {
             data.addBox(new Vector3d(0,0,0), new Vector3d(1,1,1));
+            this.registerCollider(data);
             return data;
         }
 
@@ -67,15 +69,30 @@ public class Box3dColliderBakery {
         }
 
         shape.forAllBoxes((minX, minY, minZ, maxX, maxY, maxZ) -> {
-
             data.addBox(
                     new Vector3d(Math.max(minX, 0.0), Math.max(minY, 0.0), Math.max(minZ, 0.0)),
                     new Vector3d(Math.min(maxX, 1.0), Math.min(maxY, 1.0), Math.min(maxZ, 1.0))
             );
-
         });
 
+        this.registerCollider(data);
         return data;
+    }
+
+    /**
+     * Регистрирует коллайдер в нативном реестре Box3D (аналог Rapier
+     * newVoxelCollider/addVoxelColliderBox) и сохраняет полученный handle.
+     */
+    private void registerCollider(Box3dBlockColliderData data) {
+        int handle = Box3dJNI.newVoxelCollider(data.friction, data.volume, data.restitution, data.liquid, false);
+        data.setHandle(handle);
+
+        for (Box3dBlockColliderData.Box box : data.boxes) {
+            Box3dJNI.addVoxelColliderBox(handle, new double[]{
+                    box.min().x(), box.min().y(), box.min().z(),
+                    box.max().x(), box.max().y(), box.max().z()
+            });
+        }
     }
 
     public @Nullable Box3dBlockColliderData get(BlockState state) {
