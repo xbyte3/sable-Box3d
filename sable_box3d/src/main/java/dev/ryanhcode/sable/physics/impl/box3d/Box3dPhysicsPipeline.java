@@ -11,10 +11,12 @@ import dev.ryanhcode.sable.api.sublevel.KinematicContraption;
 import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
 import dev.ryanhcode.sable.companion.math.Pose3d;
 import dev.ryanhcode.sable.companion.math.Pose3dc;
+import dev.ryanhcode.sable.physics.chunk.VoxelNeighborhoodState;
 import dev.ryanhcode.sable.physics.impl.box3d.collider.Box3dBlockColliderData;
 import dev.ryanhcode.sable.physics.impl.box3d.collider.Box3dColliderBakery;
 import dev.ryanhcode.sable.sublevel.ServerSubLevel;
 import dev.ryanhcode.sable.sublevel.plot.LevelPlot;
+import dev.ryanhcode.sable.sublevel.system.SubLevelPhysicsSystem;
 import dev.ryanhcode.sable.util.LevelAccelerator;
 import it.unimi.dsi.fastutil.ints.Int2ObjectArrayMap;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
@@ -22,6 +24,7 @@ import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ReferenceArrayList;
 import it.unimi.dsi.fastutil.objects.ReferenceList;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.core.SectionPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.Blocks;
@@ -266,8 +269,31 @@ public class Box3dPhysicsPipeline implements PhysicsPipeline {
     }
 
     @Override
-    public void handleBlockChange(SectionPos sectionPos, LevelChunkSection chunk, int x, int y, int z, BlockState oldState, BlockState newState) {
+    public void handleBlockChange(final SectionPos sectionPos, final LevelChunkSection chunk, int x, int y, int z, final BlockState oldState, final BlockState newState) {
+        x = (sectionPos.x() << 4) + x;
+        y = (sectionPos.y() << 4) + y;
+        z = (sectionPos.z() << 4) + z;
 
+        final BlockPos globalBlockPos = new BlockPos(x, y, z);
+
+        for (final Direction dir : Direction.values()) {
+            final BlockPos pos = globalBlockPos.relative(dir);
+            final VoxelNeighborhoodState state = VoxelNeighborhoodState.getState(this.accelerator, pos, null);
+            //final BlockState blockState = this.accelerator.getBlockState(pos);
+            final Box3dBlockColliderData colliderData = this.colliderBakery.get(blockState);
+
+            //final RapierVoxelColliderData colliderData = this.colliderBakery.getPhysicsDataForBlock(this.level.getBlockState(pos));
+
+            //final int colliderValue = colliderData == null ? 0 : colliderData.handle() + 1;
+            Box3dJNI.changeBlock(this.worldHandle, pos.getX(), pos.getY(), pos.getZ(), packBlockState(colliderData));
+        }
+
+        // do it for the block without offset
+        final VoxelNeighborhoodState state = VoxelNeighborhoodState.getState(this.accelerator, globalBlockPos, null);
+        final RapierVoxelColliderData colliderData = this.colliderBakery.getPhysicsDataForBlock(newState);
+
+        final int colliderValue = colliderData == null ? 0 : colliderData.handle() + 1;
+        Box3dJNI.changeBlock(this.scene.handle(), x, y, z, packBlockState(state, colliderValue));
     }
 
     @Override
@@ -285,9 +311,20 @@ public class Box3dPhysicsPipeline implements PhysicsPipeline {
 
     }
 
+    /**
+     * "Wakes up" a sub-level, indicating environmental or other changes have occurred that should resume physics for idled or sleeping sub-levels.
+     *
+     * @param body the sub-level to wake up
+     */
     @Override
     public void wakeUp(final PhysicsPipelineBody body) {
-        Box3dJNI.wakeUpObject(body.getRuntimeId());
+        this.assertBodyValid(body);
+
+        if (!SubLevelPhysicsSystem.IN_PHYSICS_STEP) {
+            Box3dJNI.wakeUpObject(this.worldHandle, body.getRuntimeId());
+        } else {
+            this.queuedWakeUps.add(body);
+        }
     }
 
     @Override

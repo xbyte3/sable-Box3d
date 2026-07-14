@@ -42,7 +42,7 @@ public record Box3dBoxHandle(long world, long body, double[] poseCache) implemen
      */
     @Override
     public void wakeUp() {
-        Box3dJNI.wakeUpObject(this.body);
+        //Box3dJNI.wakeUpObject(this.world, this.body);
     }
 
     /**

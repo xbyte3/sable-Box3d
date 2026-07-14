@@ -131,5 +131,5 @@ public final class Box3dJNI {
      * @param body the object ID
      */
     @ApiStatus.Internal
-    public static native void wakeUpObject(final long body);
+    public static native void wakeUpObject(final long world, final int objectId);
 }

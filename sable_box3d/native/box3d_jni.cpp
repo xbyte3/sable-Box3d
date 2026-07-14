@@ -67,7 +67,7 @@ struct WorldData {
     std::unordered_map<LevelColliderID, b3BodyId> bodies;
 
     // Статическое тело, на которое навешиваются шейпы глобального (world) террейна.
-    b3BodyId levelBody = b3_nullBodyId;
+    b3BodyId levelBody;
 
     // Шейпы, созданные для каждого чанка глобального уровня, чтобы их можно
     // было удалить/пересоздать в addChunk/removeChunk без утечек.
@@ -138,12 +138,13 @@ static std::vector<b3ShapeId> createChunkShapes(
                     continue;
                 }
 
-                b3Transform transform;
-                transform.q = b3Quat_identity;
-                transform.p = {
-                    (float)(chunkOriginBlockX + bx) + 0.5f,
-                    (float)(chunkOriginBlockY + by) + 0.5f,
-                    (float)(chunkOriginBlockZ + bz) + 0.5f,
+                b3Transform transform = { 
+                    { 
+                        (float)(chunkOriginBlockX + bx) + 0.5f,
+                        (float)(chunkOriginBlockY + by) + 0.5f,
+                        (float)(chunkOriginBlockZ + bz) + 0.5f
+                    },
+                    b3Quat_identity 
                 };
 
                 b3ShapeId shape = b3CreateTransformedHullShape(
@@ -227,7 +228,6 @@ Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_worldCreate
         WorldData& data = getOrCreateWorldData(worldHandle);
 
         b3BodyDef levelBodyDef = b3DefaultBodyDef();
-        levelBodyDef.type = b3_staticBody;
         data.levelBody = b3CreateBody(toWorld(worldHandle), &levelBodyDef);
     }
     catch (const std::exception& e)
@@ -677,7 +677,9 @@ Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_removeBox
 
 JNIEXPORT void JNICALL
 Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_wakeUpObject
-(JNIEnv*, jclass, jlong body)
+(JNIEnv*, jclass, jlong worldHandle, jint objectId)
 {
-    b3Body_SetAwake(toBody(body), true);
+    WorldData& data = getWorldData(worldHandle);
+    b3BodyId objectBody = data.bodies.at((LevelColliderID)objectId);
+    b3Body_SetAwake(objectBody, true);
 }
