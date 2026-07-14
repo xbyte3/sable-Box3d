@@ -29,6 +29,7 @@ import net.minecraft.core.SectionPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LevelChunkSection;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -196,32 +197,25 @@ public class Box3dPhysicsPipeline implements PhysicsPipeline {
     public void handleChunkSectionAddition(final LevelChunkSection section, final int x, final int y, final int z, final boolean uploadDataIfGlobal) {
         this.accelerator.clearCache();
 
-        // this means the x coordinate is the fastest changing, then z, then y —
-        // тот же порядок, что ChunkSection::get_index в C++ (x + (z << 4) + (y << 8))
         final int[] array = new int[LevelChunkSection.SECTION_SIZE];
-
         final SectionPos sectionPos = SectionPos.of(x, y, z);
 
-        // если только воздух, нулей достаточно — это (colliderId=0, voxelState=Empty)
         if (!section.hasOnlyAir()) {
+            final LevelChunk chunk = this.accelerator.getChunk(x, z);
+
             for (int bx = 0; bx < 16; bx++) {
                 for (int bz = 0; bz < 16; bz++) {
                     for (int by = 0; by < 16; by++) {
                         final BlockPos globalPos = new BlockPos(bx, by, bz).offset(sectionPos.minBlockX(), sectionPos.minBlockY(), sectionPos.minBlockZ());
                         final BlockState blockState = this.accelerator.getBlockState(globalPos);
 
-                        // В отличие от Rapier-пути, Box3dColliderBakery не регистрирует
-                        // коллайдеры по индексу (нет аналога Rapier3D.newVoxelCollider) —
-                        // он просто печёт per-blockstate геометрию по требованию. Пока
-                        // C++ сторона (createChunkShapes) не поддерживает per-block
-                        // friction/restitution, нам нужен только факт "есть ли коллизия".
+                        final VoxelNeighborhoodState nState = VoxelNeighborhoodState.getState(this.accelerator, globalPos, chunk);
                         final Box3dBlockColliderData colliderData = this.colliderBakery.get(blockState);
 
+                        final int colliderId = colliderData == null ? 0 : colliderData.handle() + 1;
                         final int index = bx + (bz << 4) + (by << 8);
-                        array[index] = packBlockState(colliderData);
 
-                        //final Box3dBlockColliderData colliderData = null;
-                        //array[index] = 0;
+                        array[index] = packBlockState(nState, colliderId);
                     }
                 }
             }
@@ -247,25 +241,13 @@ public class Box3dPhysicsPipeline implements PhysicsPipeline {
     }
 
     /**
-     * Упаковывает данные коллайдера блока в формат int, ожидаемый
-     * Box3dJNI.addChunk на C++ стороне: верхние 16 бит — collider id
-     * (произвольный, сейчас лишь индикатор "есть коллизия"), нижние 16 бит —
-     * индекс VoxelPhysicsState (см. C++ ALL_VOXEL_PHYSICS_STATES).
-     * <p>
-     * Box3D пока не различает Face/Edge/Corner (нет portированных contact hooks
-     * из hooks.rs), поэтому любой солидный блок помечается как "Face" (индекс 1) —
-     * этого достаточно, чтобы createChunkShapes на C++ стороне сгенерировал
-     * коллизию (см. isSolidBlock: != Empty && != Interior).
+     * Упаковывает данные о блоке в формат int, ожидаемый Box3dJNI.addChunk на
+     * C++ стороне: нижние 16 бит — индекс VoxelPhysicsState (см. C++
+     * ALL_VOXEL_PHYSICS_STATES: Empty=0, Face=1, Edge=2, Corner=3, Interior=4),
+     * верхние 16 бит — collider id (0 = нет коллизии).
      */
-    private static int packBlockState(final Box3dBlockColliderData colliderData) {
-        if (colliderData == null || colliderData.boxes.isEmpty()) {
-            return 0; // (colliderId=0, voxelState=Empty)
-        }
-
-        final int colliderId = 1; // TODO: заменить реестром по индексу, когда per-block friction/restitution будут портированы в C++
-        final int voxelStateId = 1; // Face — единственное, что сейчас отличает "солидно" от Empty на C++ стороне
-
-        return (colliderId << 16) | voxelStateId;
+    private static int packBlockState(final VoxelNeighborhoodState state, final int colliderID) {
+        return ((int) state.byteRepresentation()) | (colliderID << 16);
     }
 
     @Override
@@ -279,10 +261,8 @@ public class Box3dPhysicsPipeline implements PhysicsPipeline {
         for (final Direction dir : Direction.values()) {
             final BlockPos pos = globalBlockPos.relative(dir);
             final VoxelNeighborhoodState state = VoxelNeighborhoodState.getState(this.accelerator, pos, null);
-            //final BlockState blockState = this.accelerator.getBlockState(pos);
-            final Box3dBlockColliderData colliderData = this.colliderBakery.get(blockState);
-
-            //final RapierVoxelColliderData colliderData = this.colliderBakery.getPhysicsDataForBlock(this.level.getBlockState(pos));
+            final BlockState blockState = this.accelerator.getBlockState(pos);
+            final RapierVoxelColliderData colliderData = this.colliderBakery.getPhysicsDataForBlock(this.level.getBlockState(pos));
 
             //final int colliderValue = colliderData == null ? 0 : colliderData.handle() + 1;
             Box3dJNI.changeBlock(this.worldHandle, pos.getX(), pos.getY(), pos.getZ(), packBlockState(colliderData));

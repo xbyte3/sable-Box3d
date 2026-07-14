@@ -27,6 +27,45 @@ struct BlockState {
     VoxelPhysicsState voxel_state;
 };
 
+#include <mutex>
+
+struct VoxelColliderBox
+{
+    float minX, minY, minZ, maxX, maxY, maxZ;
+};
+
+struct VoxelColliderData
+{
+    std::vector<VoxelColliderBox> collisionBoxes;
+    bool isFluid = false;
+    float friction = 1.0f;
+    float volume = 1.0f;
+    float restitution = 0.0f;
+    bool dynamic = false;
+    // contact_events/contact_method (Rapier hooks.rs) сознательно не портированы —
+    // у Box3D пока нет аналога SablePhysicsHooks/dispatcher.
+};
+
+struct VoxelColliderRegistry
+{
+    std::vector<VoxelColliderData> colliders;
+    std::mutex mutex; // регистрация может идти с потоков worldgen
+};
+
+static VoxelColliderRegistry g_voxelColliderRegistry;
+
+static inline const VoxelColliderData* getVoxelColliderData(uint32_t blockColliderId)
+{
+    if (blockColliderId == 0) {
+        return nullptr;
+    }
+    size_t index = (size_t)blockColliderId - 1; // colliderId = registry index + 1, 0 = "нет коллайдера"
+    if (index >= g_voxelColliderRegistry.colliders.size()) {
+        return nullptr;
+    }
+    return &g_voxelColliderRegistry.colliders[index];
+}
+
 static constexpr uint8_t CHUNK_SHIFT = 4;
 static constexpr uint8_t CHUNK_SIZE = 1 << CHUNK_SHIFT;
 static constexpr int32_t CHUNK_MASK = (CHUNK_SIZE - 1);
@@ -106,9 +145,12 @@ static const b3BoxHull& unitVoxelHull()
 // внутренний (Interior блоки не генерируют коллизию, как и в Rapier-версии).
 static inline bool isSolidBlock(const BlockState& state)
 {
-    return state.block_collider_id > 0
-        && state.voxel_state != VoxelPhysicsState::EMPTY
-        && state.voxel_state != VoxelPhysicsState::INTERIOR;
+    if (state.voxel_state == VoxelPhysicsState::EMPTY || state.voxel_state == VoxelPhysicsState::INTERIOR) {
+        return false;
+    }
+
+    const VoxelColliderData* data = getVoxelColliderData(state.block_collider_id);
+    return data != nullptr && !data->isFluid && !data->collisionBoxes.empty();
 }
 
 // Создаёт box-шейпы для всех твёрдых блоков чанка на заданном теле.
@@ -122,13 +164,7 @@ static std::vector<b3ShapeId> createChunkShapes(
     int32_t chunkOriginBlockZ)
 {
     std::vector<b3ShapeId> shapes;
-    shapes.reserve(64); // обычно чанк не полностью сплошной
-
-    b3ShapeDef shapeDef = b3DefaultShapeDef();
-    shapeDef.baseMaterial.friction = 0.6f;   // TODO: брать из VoxelColliderData, когда её портируем
-    shapeDef.baseMaterial.restitution = 0.0f;
-    shapeDef.density = 0.0f;        // геометрия террейна не должна влиять на массу тела
-    shapeDef.updateBodyMass = false;
+    shapes.reserve(64);
 
     for (int bx = 0; bx < CHUNK_SIZE; bx++) {
         for (int by = 0; by < CHUNK_SIZE; by++) {
@@ -138,19 +174,45 @@ static std::vector<b3ShapeId> createChunkShapes(
                     continue;
                 }
 
-                b3Transform transform = { 
-                    { 
-                        (float)(chunkOriginBlockX + bx) + 0.5f,
-                        (float)(chunkOriginBlockY + by) + 0.5f,
-                        (float)(chunkOriginBlockZ + bz) + 0.5f
-                    },
-                    b3Quat_identity 
-                };
+                const VoxelColliderData* colliderData = getVoxelColliderData(state.block_collider_id);
+                // isSolidBlock уже гарантирует colliderData != nullptr && !collisionBoxes.empty()
 
-                b3ShapeId shape = b3CreateTransformedHullShape(
-                    body, &shapeDef, &unitVoxelHull().base, transform, { 1.0f, 1.0f, 1.0f });
+                b3ShapeDef shapeDef = b3DefaultShapeDef();
+                shapeDef.baseMaterial.friction = colliderData->friction;
+                shapeDef.baseMaterial.restitution = colliderData->restitution;
+                shapeDef.density = 0.0f;
+                shapeDef.updateBodyMass = false;
 
-                shapes.push_back(shape);
+                float originX = (float)(chunkOriginBlockX + bx);
+                float originY = (float)(chunkOriginBlockY + by);
+                float originZ = (float)(chunkOriginBlockZ + bz);
+
+                for (const VoxelColliderBox& box : colliderData->collisionBoxes) {
+                    float hx = (box.maxX - box.minX) * 0.5f;
+                    float hy = (box.maxY - box.minY) * 0.5f;
+                    float hz = (box.maxZ - box.minZ) * 0.5f;
+
+                    // Защита от вырожденных боксов — именно такой случай
+                    // раньше приводил к "area > 0.0f" assert в hull.c.
+                    if (hx <= 0.0f || hy <= 0.0f || hz <= 0.0f) {
+                        continue;
+                    }
+
+                    b3BoxHull hull = b3MakeBoxHull(hx, hy, hz);
+
+                    b3Transform transform;
+                    transform.q = b3Quat_identity;
+                    transform.p = {
+                        originX + (box.minX + box.maxX) * 0.5f,
+                        originY + (box.minY + box.maxY) * 0.5f,
+                        originZ + (box.minZ + box.maxZ) * 0.5f,
+                    };
+
+                    b3ShapeId shape = b3CreateTransformedHullShape(
+                        body, &shapeDef, &hull.base, transform, { 1.0f, 1.0f, 1.0f });
+
+                    shapes.push_back(shape);
+                }
             }
         }
     }
@@ -287,6 +349,52 @@ Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_getPose
     tmp[6] = q.s;
 
     env->SetDoubleArrayRegion(outPose, 0, 7, tmp);
+}
+JNIEXPORT jint JNICALL
+Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_newVoxelCollider
+(JNIEnv*, jclass, jdouble friction, jdouble volume, jdouble restitution, jboolean isFluid, jboolean dynamic)
+{
+    std::lock_guard<std::mutex> lock(g_voxelColliderRegistry.mutex);
+
+    VoxelColliderData data;
+    data.friction = (float)friction;
+    data.volume = (float)volume;
+    data.restitution = (float)restitution;
+    data.isFluid = isFluid != 0;
+    data.dynamic = dynamic != 0;
+
+    jint index = (jint)g_voxelColliderRegistry.colliders.size();
+    g_voxelColliderRegistry.colliders.push_back(std::move(data));
+    return index;
+}
+
+JNIEXPORT void JNICALL
+Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_addVoxelColliderBox
+(JNIEnv* env, jclass, jint index, jdoubleArray boxBounds)
+{
+    jdouble bounds[6];
+    env->GetDoubleArrayRegion(boxBounds, 0, 6, bounds);
+
+    std::lock_guard<std::mutex> lock(g_voxelColliderRegistry.mutex);
+    if (index < 0 || (size_t)index >= g_voxelColliderRegistry.colliders.size()) {
+        return;
+    }
+
+    g_voxelColliderRegistry.colliders[index].collisionBoxes.push_back({
+        (float)bounds[0], (float)bounds[1], (float)bounds[2],
+        (float)bounds[3], (float)bounds[4], (float)bounds[5]
+        });
+}
+
+JNIEXPORT void JNICALL
+Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_clearVoxelColliderBoxes
+(JNIEnv*, jclass, jint index)
+{
+    std::lock_guard<std::mutex> lock(g_voxelColliderRegistry.mutex);
+    if (index < 0 || (size_t)index >= g_voxelColliderRegistry.colliders.size()) {
+        return;
+    }
+    g_voxelColliderRegistry.colliders[index].collisionBoxes.clear();
 }
 
 JNIEXPORT jlong JNICALL

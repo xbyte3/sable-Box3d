@@ -100,6 +100,15 @@ public final class Box3dJNI {
     public static native void worldDestroy(long worldHandle);
     public static native void worldStep(long worldHandle, float dt, int substeps);
 
+    @ApiStatus.Internal
+    public static native int newVoxelCollider(double friction, double volume, double restitution, boolean isFluid, boolean dynamic);
+
+    @ApiStatus.Internal
+    public static native void addVoxelColliderBox(int index, double[] boxBounds);
+
+    @ApiStatus.Internal
+    public static native void clearVoxelColliderBoxes(int index);
+
     public static native long createSubLevel(long worldHandle, int id, double[] pose);
     public static native void removeSubLevel(long worldHandle, int id);
 

@@ -21,6 +21,15 @@ JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_worl
 JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_getPose
     (JNIEnv* env, jclass, jlong bodyHandle, jdoubleArray outArray);
 
+JNIEXPORT jint JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_newVoxelCollider
+    (JNIEnv*, jclass, jdouble friction, jdouble volume, jdouble restitution, jboolean isFluid, jboolean dynamic);
+
+JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_addVoxelColliderBox
+    (JNIEnv*, jclass, jint index, jdoubleArray boxBounds);
+
+JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_clearVoxelColliderBoxes
+    (JNIEnv*, jclass, jint index);
+
 JNIEXPORT jlong JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_createSubLevel
     (JNIEnv*, jclass, jlong world, jint id, jdoubleArray pose);
 
