@@ -23,10 +23,10 @@ neoForge {
         client {
             client()
             gameDirectory = project.file("runs/client")
-            jvmArguments.add("-Xint")
-            jvmArguments.add("-XX:+ShowCodeDetailsInExceptionMessages")
-            jvmArguments.add("-XX:-OmitStackTraceInFastThrow")
-            jvmArguments.add("-XX:TieredStopAtLevel=1")
+//            jvmArguments.add("-Xint")
+//            jvmArguments.add("-XX:+ShowCodeDetailsInExceptionMessages")
+//            jvmArguments.add("-XX:-OmitStackTraceInFastThrow")
+//            jvmArguments.add("-XX:TieredStopAtLevel=1")
         }
         server {
             server()

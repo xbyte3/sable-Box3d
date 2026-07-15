@@ -1,10 +1,15 @@
 
 #include "box3d_jni.h"
+#include <windows.h>
 #include <malloc.h>
 #include <vector>
 #include <stdexcept>
 #include <cassert>
 #include <unordered_map>
+#include <mutex>
+#include <array>
+
+static std::recursive_mutex g_physicsMutex;
 
 typedef enum {
     EMPTY,
@@ -26,8 +31,6 @@ struct BlockState {
     uint32_t block_collider_id;
     VoxelPhysicsState voxel_state;
 };
-
-#include <mutex>
 
 struct BlockKey
 {
@@ -90,9 +93,12 @@ static constexpr int32_t CHUNK_MASK = (CHUNK_SIZE - 1);
 
 struct ChunkSection {
     std::vector<BlockState> blocks;
+    b3BodyId body = b3_nullBodyId;
+    std::vector<std::vector<b3ShapeId>> shapes;
 
     ChunkSection(std::vector<BlockState> blocks)
-        : blocks(std::move(blocks))
+        : blocks(std::move(blocks)),
+        shapes(CHUNK_SIZE* CHUNK_SIZE* CHUNK_SIZE)
     {
         if (this->blocks.size() != CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE) {
             throw std::runtime_error("Invalid block count");
@@ -114,8 +120,24 @@ struct ChunkSection {
     }
 };
 
-constexpr int32_t OCTREE_CHUNK_SHIFT = 6;
-constexpr int32_t OCTREE_CHUNK_SIZE = 1 << OCTREE_CHUNK_SHIFT;
+static void dbg(const char* fmt, ...)
+{
+    char buf[512];
+
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf_s(buf, sizeof(buf), _TRUNCATE, fmt, args);
+    va_end(args);
+
+    OutputDebugStringA(buf);
+    OutputDebugStringA("\n");
+}
+
+
+inline int getBlockIndex(int x, int y, int z)
+{
+    return x + y * 16 + z * 16 * 16;
+}
 
 using LevelColliderID = size_t;
 
@@ -124,11 +146,7 @@ struct WorldData {
     std::unordered_map<LevelColliderID, b3BodyId> bodies;
 
     // Статическое тело, на которое навешиваются шейпы глобального (world) террейна.
-    b3BodyId levelBody;
-
-    // Шейпы, созданные для каждого чанка глобального уровня, чтобы их можно
-    // было удалить/пересоздать в addChunk/removeChunk без утечек.
-    std::unordered_map<BlockKey, std::vector<b3ShapeId>, BlockKeyHash> globalBlockShapes;
+    b3BodyId levelBody = b3_nullBodyId;
 
     // То же самое, но для чанков, принадлежащих конкретному sub-level объекту
     // (object_id). При удалении самого объекта (removeSublevel) тело
@@ -171,7 +189,7 @@ static inline bool isSolidBlock(const BlockState& state)
     return data != nullptr && !data->isFluid && !data->collisionBoxes.empty();
 }
 
-// Создаёт шейп(ы) для одного солидного блока по его глобальным блок-координатам.
+// Создаёт шейп(ы) для одного солидного блока по его локальным блок-координатам в чанке.
 static std::vector<b3ShapeId> createBlockShapes(
     b3BodyId body,
     const VoxelColliderData& colliderData,
@@ -201,9 +219,9 @@ static std::vector<b3ShapeId> createBlockShapes(
         b3Transform transform;
         transform.q = b3Quat_identity;
         transform.p = {
-            (float)blockX + (box.minX + box.maxX) * 0.5f,
-            (float)blockY + (box.minY + box.maxY) * 0.5f,
-            (float)blockZ + (box.minZ + box.maxZ) * 0.5f,
+            blockX + (box.minX + box.maxX) * 0.5f,
+            blockY + (box.minY + box.maxY) * 0.5f,
+            blockZ + (box.minZ + box.maxZ) * 0.5f,
         };
 
         shapes.push_back(b3CreateTransformedHullShape(body, &shapeDef, &hull.base, transform, { 1.0f, 1.0f, 1.0f }));
@@ -274,6 +292,8 @@ JNIEXPORT jlong JNICALL
 Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_worldCreate
 (JNIEnv* env, jclass, jfloat gx, jfloat gy, jfloat gz)
 {
+    std::lock_guard<std::recursive_mutex> lock(g_physicsMutex);
+
     b3WorldDef def = b3DefaultWorldDef();
     def.gravity = { gx, gy, gz };
     jlong worldHandle = fromWorld(b3CreateWorldDoublePrecision(&def));
@@ -286,14 +306,15 @@ Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_worldCreate
     }
     catch (const std::exception& e)
     {
-        printf("%s\n", e.what());
-        fflush(stdout);
+        b3DestroyWorld(toWorld(worldHandle));
+
+        dbg("%s\n", e.what());
 
         jclass cls = env->FindClass("java/lang/RuntimeException");
         env->ThrowNew(cls, e.what());
+
         return 0;
     }
-    
 
     return worldHandle;
 }
@@ -302,6 +323,8 @@ JNIEXPORT void JNICALL
 Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_worldDestroy
 (JNIEnv*, jclass, jlong world)
 {
+    std::lock_guard<std::recursive_mutex> lock(g_physicsMutex);
+
     auto it = worldData.find((uint32_t)world);
     if (it != worldData.end()) {
         worldData.erase(it);
@@ -393,256 +416,90 @@ JNIEXPORT jlong JNICALL
 Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_createSubLevel
 (JNIEnv* env, jclass, jlong world, jint id, jdoubleArray pose)
 {
-    try
+    std::lock_guard<std::recursive_mutex> lock(g_physicsMutex);
+
+    auto worldIt = worldData.find((uint32_t)world);
+
+    b3WorldId worldId = toWorld(world);
+
+    jdouble* elements = env->GetDoubleArrayElements(pose, nullptr);
+
+    b3BodyDef def = b3DefaultBodyDef();
+
+    def.type = b3_dynamicBody;
+
+    def.position = {
+        (float)elements[0],
+        (float)elements[1],
+        (float)elements[2]
+    };
+
+    def.rotation = {
+        (float)elements[3],
+        (float)elements[4],
+        (float)elements[5],
+        (float)elements[6]
+    };
+
+    env->ReleaseDoubleArrayElements(
+        pose,
+        elements,
+        JNI_ABORT
+    );
+
+    b3BodyId body = b3CreateBody(worldId, &def);
+
+    b3ShapeDef shapeDef = b3DefaultShapeDef();
+
+    b3BoxHull box = b3MakeBoxHull(
+        0.5f,
+        0.5f,
+        0.5f
+    );
+
+    b3ShapeId shape = b3CreateHullShape(
+        body,
+        &shapeDef,
+        &box.base
+    );
+
+    b3MassData massData;
+
+    massData.mass = 1.0f;
+    massData.center = {
+        0.0f,
+        0.0f,
+        0.0f
+    };
+    massData.inertia = b3Mat3_identity;
+
+    b3Body_SetMassData(
+        body,
+        massData
+    );
+
+    WorldData& data = worldIt->second;
+
+    auto existing = data.bodies.find((LevelColliderID)id);
+
+    if (existing != data.bodies.end())
     {
-        printf("[createSubLevel] begin world=%lld id=%d pose=%p\n",
-            (long long)world,
-            id,
-            pose);
-
-        fflush(stdout);
-
-
-        // =========================
-        // WORLD CHECK
-        // =========================
-
-        if (world == 0)
+        if (b3Body_IsValid(existing->second))
         {
-            throw std::runtime_error("createSubLevel: world handle is zero");
+            b3DestroyBody(existing->second);
         }
-
-        auto worldIt = worldData.find((uint32_t)world);
-        if (worldIt == worldData.end())
-        {
-            throw std::runtime_error("createSubLevel: worldData not found");
-        }
-
-        b3WorldId worldId = toWorld(world);
-
-        if (!b3World_IsValid(worldId))
-        {
-            throw std::runtime_error("createSubLevel: invalid b3WorldId");
-        }
-
-
-        // =========================
-        // POSE CHECK
-        // =========================
-
-        if (pose == nullptr)
-        {
-            throw std::runtime_error("createSubLevel: pose is null");
-        }
-
-        jsize poseLength = env->GetArrayLength(pose);
-
-        printf("[createSubLevel] pose length=%d\n", poseLength);
-
-        if (poseLength < 7)
-        {
-            throw std::runtime_error("createSubLevel: pose length < 7");
-        }
-
-
-        jdouble* elements = env->GetDoubleArrayElements(pose, nullptr);
-
-        if (elements == nullptr)
-        {
-            throw std::runtime_error("createSubLevel: GetDoubleArrayElements failed");
-        }
-
-
-        printf(
-            "[createSubLevel] pose: %.3f %.3f %.3f %.3f %.3f %.3f %.3f\n",
-            elements[0],
-            elements[1],
-            elements[2],
-            elements[3],
-            elements[4],
-            elements[5],
-            elements[6]
-        );
-
-
-        // =========================
-        // CREATE BODY
-        // =========================
-
-        b3BodyDef def = b3DefaultBodyDef();
-
-        def.type = b3_dynamicBody;
-
-        def.position = {
-            (float)elements[0],
-            (float)elements[1],
-            (float)elements[2]
-        };
-
-        def.rotation = {
-            (float)elements[3],
-            (float)elements[4],
-            (float)elements[5],
-            (float)elements[6]
-        };
-
-
-        env->ReleaseDoubleArrayElements(
-            pose,
-            elements,
-            JNI_ABORT
-        );
-
-
-        printf("[createSubLevel] creating body\n");
-        fflush(stdout);
-
-
-        b3BodyId body = b3CreateBody(worldId, &def);
-
-
-        printf("[createSubLevel] body index=%u generation=%u\n",
-            body.index1,
-            body.generation);
-
-        fflush(stdout);
-
-
-        if (!b3Body_IsValid(body))
-        {
-            throw std::runtime_error("createSubLevel: created body is invalid");
-        }
-
-
-        // =========================
-        // CREATE SHAPE
-        // =========================
-
-        printf("[createSubLevel] creating shape\n");
-        fflush(stdout);
-
-
-        b3ShapeDef shapeDef = b3DefaultShapeDef();
-
-        b3BoxHull box = b3MakeBoxHull(
-            1.0f,
-            1.0f,
-            1.0f
-        );
-
-
-        b3ShapeId shape = b3CreateHullShape(
-            body,
-            &shapeDef,
-            &box.base
-        );
-
-
-        printf("[createSubLevel] shape index=%u generation=%u\n",
-            shape.index1,
-            shape.generation);
-
-        fflush(stdout);
-
-
-        if (!b3Shape_IsValid(shape))
-        {
-            throw std::runtime_error("createSubLevel: created shape is invalid");
-        }
-
-
-        // =========================
-        // MASS
-        // =========================
-
-        printf("[createSubLevel] setting mass\n");
-        fflush(stdout);
-
-
-        b3MassData massData;
-
-        massData.mass = 1.0f;
-        massData.center = {
-            0.0f,
-            0.0f,
-            0.0f
-        };
-        massData.inertia = b3Mat3_identity;
-
-
-        b3Body_SetMassData(
-            body,
-            massData
-        );
-
-
-        // =========================
-        // STORE
-        // =========================
-
-        WorldData& data = worldIt->second;
-
-
-        auto existing = data.bodies.find((LevelColliderID)id);
-
-        if (existing != data.bodies.end())
-        {
-            printf(
-                "[createSubLevel] WARNING: replacing existing body id=%d\n",
-                id
-            );
-
-            if (b3Body_IsValid(existing->second))
-            {
-                b3DestroyBody(existing->second);
-            }
-        }
-
-
-        data.bodies[(LevelColliderID)id] = body;
-
-
-        printf(
-            "[createSubLevel] success id=%d handle=%lld\n",
-            id,
-            (long long)fromBody(body)
-        );
-
-        fflush(stdout);
-
-
-        return fromBody(body);
     }
-    catch (const std::exception& e)
-    {
-        printf(
-            "[createSubLevel] ERROR: %s\n",
-            e.what()
-        );
 
-        fflush(stdout);
+    data.bodies[(LevelColliderID)id] = body;
 
-
-        jclass cls = env->FindClass(
-            "java/lang/RuntimeException"
-        );
-
-        if (cls)
-        {
-            env->ThrowNew(
-                cls,
-                e.what()
-            );
-        }
-
-        return 0;
-    }
+    return fromBody(body);
 }
 
 JNIEXPORT void JNICALL
 Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_removeSubLevel
 (JNIEnv* env, jclass, jlong world, jint id)
 {
+    std::lock_guard<std::recursive_mutex> lock(g_physicsMutex);
     WorldData& data = getWorldData(world);
         
     auto it = data.bodies.find((LevelColliderID)id);
@@ -659,6 +516,7 @@ JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_addC
     JNIEnv* env, jclass, jlong worldHandle, jint x, jint y, jint z,
     jintArray intData, jboolean global, jint object_id)
 {
+    std::lock_guard<std::recursive_mutex> lock(g_physicsMutex);
     std::vector<jint> ints(4096);
     env->GetIntArrayRegion(intData, 0, 4096, ints.data());
 
@@ -678,13 +536,28 @@ JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_addC
         blocks.push_back({ (uint32_t)blockColliderId, ALL_VOXEL_PHYSICS_STATES[voxelStateId] });
     }
 
-    ChunkSection chunk(std::move(blocks));
+    // =========================
+        // CREATE BODY
+    // =========================
+
+    b3BodyDef def = b3DefaultBodyDef();
+    def.position = {
+        static_cast<double>(x << CHUNK_SHIFT),
+        static_cast<double>(y << CHUNK_SHIFT),
+        static_cast<double>(z << CHUNK_SHIFT)
+    };
+    def.rotation = b3Quat_identity;
 
     WorldData& data = getWorldData(worldHandle);
     int64_t packedPos = packSectionPosition(x, y, z);
 
-    data.mainLevelChunks.insert_or_assign(packedPos, chunk);
-    const ChunkSection& storedChunk = data.mainLevelChunks.at(packedPos);
+    auto [it, inserted] = data.mainLevelChunks.insert_or_assign(
+        packedPos,
+        ChunkSection(std::move(blocks))
+    );
+
+    ChunkSection& storedChunk = it->second;
+    storedChunk.body = b3CreateBody(toWorld(worldHandle), &def);
 
     if (global != 0) {
         for (int bx = 0; bx < CHUNK_SIZE; bx++) {
@@ -692,27 +565,26 @@ JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_addC
                 for (int bz = 0; bz < CHUNK_SIZE; bz++) {
                     BlockState blockState = storedChunk.get_block(bx, by, bz);
 
-                    int32_t worldX = (x << CHUNK_SHIFT) + bx;
-                    int32_t worldY = (y << CHUNK_SHIFT) + by;
-                    int32_t worldZ = (z << CHUNK_SHIFT) + bz;
-                    BlockKey key{ worldX, worldY, worldZ };
-
-                    // На случай повторной отправки того же чанка — снести старые шейпы блока перед пересозданием.
-                    auto existing = data.globalBlockShapes.find(key);
-                    if (existing != data.globalBlockShapes.end()) {
-                        destroyChunkShapes(existing->second);
-                        data.globalBlockShapes.erase(existing);
-                    }
-
                     if (!isSolidBlock(blockState)) {
                         continue;
                     }
 
                     const VoxelColliderData* colliderData = getVoxelColliderData(blockState.block_collider_id);
-                    std::vector<b3ShapeId> shapes = createBlockShapes(data.levelBody, *colliderData, worldX, worldY, worldZ);
-                    if (!shapes.empty()) {
-                        data.globalBlockShapes.emplace(key, std::move(shapes));
+
+                    if (!colliderData) {
+                        continue;
                     }
+
+                    int index = getBlockIndex(bx, by, bz);
+
+                    storedChunk.shapes[index] =
+                        createBlockShapes(
+                            storedChunk.body,
+                            *colliderData,
+                            bx,
+                            by,
+                            bz
+                        );
                 }
             }
         }
@@ -736,31 +608,31 @@ JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_addC
 JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_removeChunk(
     JNIEnv*, jclass, jlong worldHandle, jint x, jint y, jint z, jboolean global)
 {
+     std::lock_guard<std::recursive_mutex> lock(g_physicsMutex);
+
     WorldData& data = getWorldData(worldHandle);
+
     int64_t packedPos = packSectionPosition(x, y, z);
 
-    data.mainLevelChunks.erase(packedPos);
+    auto it = data.mainLevelChunks.find(packedPos);
 
-    if (global != 0) {
-        for (int bx = 0; bx < CHUNK_SIZE; bx++) {
-            for (int by = 0; by < CHUNK_SIZE; by++) {
-                for (int bz = 0; bz < CHUNK_SIZE; bz++) {
-                    BlockKey key{
-                        (x << CHUNK_SHIFT) + bx,
-                        (y << CHUNK_SHIFT) + by,
-                        (z << CHUNK_SHIFT) + bz
-                    };
-
-                    auto it = data.globalBlockShapes.find(key);
-                    if (it != data.globalBlockShapes.end()) {
-                        destroyChunkShapes(it->second);
-                        data.globalBlockShapes.erase(it);
-                    }
-                }
-            }
-        }
+    if (it == data.mainLevelChunks.end()) {
         return;
     }
+
+    ChunkSection& chunk = it->second;
+
+    // Удаляем все shape'ы секции
+    for (auto& shapes : chunk.shapes) {
+        destroyChunkShapes(shapes);
+    }
+
+    // Удаляем тело секции
+    if (b3Body_IsValid(chunk.body)) {
+        b3DestroyBody(chunk.body);
+    }
+
+    data.mainLevelChunks.erase(it);
 
     // Как и в Rust-версии, для sub-level объектов removeChunk по конкретному
     // object_id не поддерживается (сигнатура не передаёт object_id) —
@@ -772,42 +644,86 @@ JNIEXPORT void JNICALL
 Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_changeBlock
 (JNIEnv*, jclass, jlong worldHandle, jint x, jint y, jint z, jint packedBlock)
 {
+    std::lock_guard<std::recursive_mutex> lock(g_physicsMutex);
+
     WorldData& data = getWorldData(worldHandle);
 
     uint32_t packed = (uint32_t)packedBlock;
+
     uint16_t blockColliderId = packed >> 16;
     uint16_t voxelStateId = packed & 0xFFFF;
+
     if (voxelStateId >= 5) {
         voxelStateId = 0;
     }
 
-    BlockState blockState{ (uint32_t)blockColliderId, ALL_VOXEL_PHYSICS_STATES[voxelStateId] };
+    BlockState blockState{
+        (uint32_t)blockColliderId,
+        ALL_VOXEL_PHYSICS_STATES[voxelStateId]
+    };
 
-    // Обновляем сырые данные чанка, если он загружен (аналог chunk.set_block из Rapier).
-    int64_t chunkPos = packSectionPosition(x >> CHUNK_SHIFT, y >> CHUNK_SHIFT, z >> CHUNK_SHIFT);
-    auto chunkIt = data.mainLevelChunks.find(chunkPos);
-    if (chunkIt != data.mainLevelChunks.end()) {
-        chunkIt->second.set_block(x & (CHUNK_SIZE - 1), y & (CHUNK_SIZE - 1), z & (CHUNK_SIZE - 1), blockState);
+
+    // Координаты секции
+    int32_t sectionX = x >> CHUNK_SHIFT;
+    int32_t sectionY = y >> CHUNK_SHIFT;
+    int32_t sectionZ = z >> CHUNK_SHIFT;
+
+
+    int64_t sectionPos =
+        packSectionPosition(sectionX, sectionY, sectionZ);
+
+
+    auto chunkIt = data.mainLevelChunks.find(sectionPos);
+
+    if (chunkIt == data.mainLevelChunks.end()) {
+        return;
     }
 
-    BlockKey key{ x, y, z };
 
-    // Всегда сносим старый шейп блока перед пересозданием.
-    auto shapeIt = data.globalBlockShapes.find(key);
-    if (shapeIt != data.globalBlockShapes.end()) {
-        destroyChunkShapes(shapeIt->second);
-        data.globalBlockShapes.erase(shapeIt);
-    }
+    ChunkSection& chunk = chunkIt->second;
+
+
+    // Локальные координаты блока в секции
+    int bx = x & (CHUNK_SIZE - 1);
+    int by = y & (CHUNK_SIZE - 1);
+    int bz = z & (CHUNK_SIZE - 1);
+
+
+    int index = getBlockIndex(bx, by, bz);
+
+
+    // Удаляем старую коллизию блока
+
+    dbg("index=%zu size=%zu", index, chunk.shapes.size());
+    destroyChunkShapes(chunk.shapes[index]);
+
+
+    // Обновляем состояние блока
+    chunk.set_block(bx, by, bz, blockState);
+
 
     if (!isSolidBlock(blockState)) {
         return;
     }
 
-    const VoxelColliderData* colliderData = getVoxelColliderData(blockState.block_collider_id);
-    std::vector<b3ShapeId> shapes = createBlockShapes(data.levelBody, *colliderData, x, y, z);
-    if (!shapes.empty()) {
-        data.globalBlockShapes.emplace(key, std::move(shapes));
+
+    const VoxelColliderData* colliderData =
+        getVoxelColliderData(blockState.block_collider_id);
+
+
+    if (!colliderData) {
+        return;
     }
+
+
+    chunk.shapes[index] =
+        createBlockShapes(
+            chunk.body,
+            *colliderData,
+            bx,
+            by,
+            bz
+        );
 }
 
 // =======================
@@ -855,6 +771,7 @@ JNIEXPORT void JNICALL
 Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_wakeUpObject
 (JNIEnv*, jclass, jlong worldHandle, jint objectId)
 {
+    std::lock_guard<std::recursive_mutex> lock(g_physicsMutex);
     WorldData& data = getWorldData(worldHandle);
     b3BodyId objectBody = data.bodies.at((LevelColliderID)objectId);
     b3Body_SetAwake(objectBody, true);
