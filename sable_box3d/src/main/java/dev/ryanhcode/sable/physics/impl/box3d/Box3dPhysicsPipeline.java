@@ -3,6 +3,8 @@ package dev.ryanhcode.sable.physics.impl.box3d;
 import dev.ryanhcode.sable.api.physics.PhysicsPipeline;
 
 import dev.ryanhcode.sable.api.physics.PhysicsPipelineBody;
+import dev.ryanhcode.sable.api.physics.constraint.PhysicsConstraintConfiguration;
+import dev.ryanhcode.sable.api.physics.constraint.PhysicsConstraintHandle;
 import dev.ryanhcode.sable.api.physics.object.box.BoxHandle;
 import dev.ryanhcode.sable.api.physics.object.box.BoxPhysicsObject;
 import dev.ryanhcode.sable.api.physics.object.rope.RopeHandle;
@@ -12,6 +14,7 @@ import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
 import dev.ryanhcode.sable.companion.math.Pose3d;
 import dev.ryanhcode.sable.companion.math.Pose3dc;
 import dev.ryanhcode.sable.physics.chunk.VoxelNeighborhoodState;
+import dev.ryanhcode.sable.physics.config.PhysicsConfigData;
 import dev.ryanhcode.sable.physics.impl.box3d.collider.Box3dBlockColliderData;
 import dev.ryanhcode.sable.physics.impl.box3d.collider.Box3dColliderBakery;
 import dev.ryanhcode.sable.sublevel.ServerSubLevel;
@@ -33,6 +36,8 @@ import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LevelChunkSection;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import org.joml.Quaterniondc;
 import org.joml.Vector3d;
 import org.joml.Vector3dc;
@@ -221,15 +226,24 @@ public class Box3dPhysicsPipeline implements PhysicsPipeline {
             }
         }
 
-        final LevelPlot plot = SubLevelContainer.getContainer(this.level).getPlot(x, z);
+        final LevelPlot plot = SubLevelContainer.getContainer(this.level).getPlot(x, z); // x, z здесь уже координаты чанка
         final boolean global = plot == null;
         int id = -1;
 
-        if (plot != null && uploadDataIfGlobal) {
-            id = ((ServerSubLevel) plot.getSubLevel()).getRuntimeId();
+        int sendX = x, sendY = y, sendZ = z;
+
+        if (plot != null) {
+            final BlockPos center = plot.getCenterBlock();
+            sendX = x - (center.getX() >> 4);
+            sendY = y - (center.getY() >> 4);
+            sendZ = z - (center.getZ() >> 4);
+
+            if (uploadDataIfGlobal) {
+                id = ((ServerSubLevel) plot.getSubLevel()).getRuntimeId();
+            }
         }
 
-        Box3dJNI.addChunk(this.worldHandle, x, y, z, array, global, id);
+        Box3dJNI.addChunk(this.worldHandle, sendX, sendY, sendZ, array, global, id);
     }
 
     /**
@@ -268,14 +282,29 @@ public class Box3dPhysicsPipeline implements PhysicsPipeline {
         this.updateBlockPhysics(globalBlockPos);
     }
 
+    @Override
+    public void onStatsChanged(@NotNull ServerSubLevel serverSubLevel) {
+        //PhysicsPipeline.super.onStatsChanged(serverSubLevel);
+    }
+
     private void updateBlockPhysics(final BlockPos pos) {
         final VoxelNeighborhoodState state = VoxelNeighborhoodState.getState(this.accelerator, pos, null);
         final BlockState blockState = this.accelerator.getBlockState(pos);
         final Box3dBlockColliderData colliderData = this.colliderBakery.get(blockState);
-
         final int colliderId = colliderData == null ? 0 : colliderData.handle() + 1;
 
-        Box3dJNI.changeBlock(this.worldHandle, pos.getX(), pos.getY(), pos.getZ(), packBlockState(state, colliderId));
+        final LevelPlot plot = SubLevelContainer.getContainer(this.level).getPlot(pos.getX() >> 4, pos.getZ() >> 4);
+
+        int sendX = pos.getX(), sendY = pos.getY(), sendZ = pos.getZ();
+
+        if (plot != null) {
+            final BlockPos center = plot.getCenterBlock();
+            sendX -= center.getX();
+            sendY -= center.getY();
+            sendZ -= center.getZ();
+        }
+
+        Box3dJNI.changeBlock(this.worldHandle, sendX, sendY, sendZ, packBlockState(state, colliderId));
     }
 
     @Override
@@ -293,6 +322,30 @@ public class Box3dPhysicsPipeline implements PhysicsPipeline {
 
     }
 
+    @Override
+    public void addLinearAndAngularVelocity(PhysicsPipelineBody body, Vector3dc linearVelocity, Vector3dc angularVelocity) {
+        //PhysicsPipeline.super.addLinearAndAngularVelocity(body, linearVelocity, angularVelocity);
+    }
+
+    @Override
+    public void resetVelocity(PhysicsPipelineBody body) {
+        //PhysicsPipeline.super.resetVelocity(body);
+    }
+
+    @Override
+    public Vector3d getLinearVelocity(final PhysicsPipelineBody body, final Vector3d dest) {
+        this.assertBodyValid(body);
+        Box3dJNI.getLinearVelocity(this.worldHandle, body.getRuntimeId(), this.poseCache);
+        return dest.set(this.poseCache);
+    }
+
+    @Override
+    public Vector3d getAngularVelocity(final PhysicsPipelineBody body, final Vector3d dest) {
+        this.assertBodyValid(body);
+        Box3dJNI.getAngularVelocity(this.worldHandle, body.getRuntimeId(), this.poseCache);
+        return dest.set(this.poseCache);
+    }
+
     /**
      * "Wakes up" a sub-level, indicating environmental or other changes have occurred that should resume physics for idled or sleeping sub-levels.
      *
@@ -307,6 +360,16 @@ public class Box3dPhysicsPipeline implements PhysicsPipeline {
         } else {
             this.queuedWakeUps.add(body);
         }
+    }
+
+    @Override
+    public @Nullable <T extends PhysicsConstraintHandle> T addConstraint(@Nullable PhysicsPipelineBody bodyA, @Nullable PhysicsPipelineBody bodyB, @NotNull PhysicsConstraintConfiguration<T> configuration) {
+        return PhysicsPipeline.super.addConstraint(bodyA, bodyB, configuration);
+    }
+
+    @Override
+    public void updateConfigFrom(PhysicsConfigData data) {
+        //PhysicsPipeline.super.updateConfigFrom(data);
     }
 
     @Override

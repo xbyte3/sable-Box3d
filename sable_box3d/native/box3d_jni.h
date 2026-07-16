@@ -36,6 +36,12 @@ JNIEXPORT jlong JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_cre
 JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_removeSubLevel
     (JNIEnv*, jclass, jlong world, jint id);
 
+JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_getLinearVelocity
+    (JNIEnv*, jclass, jlong world, jint id, jdoubleArray out);
+
+JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_getAngularVelocity
+    (JNIEnv*, jclass, jlong world, jint id, jdoubleArray out);
+
 JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_addChunk
     (JNIEnv*, jclass, jlong world, jint x, jint y, jint z, jintArray data, jboolean global, jint object_id);
 

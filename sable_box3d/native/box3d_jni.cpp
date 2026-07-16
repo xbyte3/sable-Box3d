@@ -87,14 +87,27 @@ static inline const VoxelColliderData* getVoxelColliderData(uint32_t blockCollid
     return &g_voxelColliderRegistry.colliders[index];
 }
 
+struct SubLevelPhysicsData
+{
+    b3BodyId body;
+
+    // chunk position -> shapes
+    std::unordered_map<int64_t, std::vector<b3ShapeId>> shapes;
+};
+
 static constexpr uint8_t CHUNK_SHIFT = 4;
 static constexpr uint8_t CHUNK_SIZE = 1 << CHUNK_SHIFT;
 static constexpr int32_t CHUNK_MASK = (CHUNK_SIZE - 1);
+
+using LevelColliderID = size_t;
 
 struct ChunkSection {
     std::vector<BlockState> blocks;
     b3BodyId body = b3_nullBodyId;
     std::vector<std::vector<b3ShapeId>> shapes;
+
+    bool isGlobal = true;          // true = статичный мир, false = чанк принадлежит саблевелу
+    LevelColliderID objectId = 0;  // валиден только если isGlobal == false
 
     ChunkSection(std::vector<BlockState> blocks)
         : blocks(std::move(blocks)),
@@ -105,17 +118,17 @@ struct ChunkSection {
         }
     }
 
-    inline size_t get_index(int x, int y, int z) const {
+    inline LevelColliderID get_index(int x, int y, int z) const {
         return (x + (z << 4) + (y << 8));
     }
 
     void set_block(int x, int y, int z, BlockState state) {
-        size_t index = get_index(x, y, z);
+        LevelColliderID index = get_index(x, y, z);
         blocks[index] = state;
     }
 
     BlockState get_block(int x, int y, int z) const {
-        size_t index = get_index(x, y, z);
+        LevelColliderID index = get_index(x, y, z);
         return blocks[index];
     }
 };
@@ -138,8 +151,6 @@ inline int getBlockIndex(int x, int y, int z)
 {
     return x + y * 16 + z * 16 * 16;
 }
-
-using LevelColliderID = size_t;
 
 struct WorldData {
     std::unordered_map<int64_t, ChunkSection> mainLevelChunks;
@@ -429,9 +440,9 @@ Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_createSubLevel
     def.type = b3_dynamicBody;
 
     def.position = {
-        (float)elements[0],
-        (float)elements[1],
-        (float)elements[2]
+        elements[0],
+        elements[1],
+        elements[2]
     };
 
     def.rotation = {
@@ -512,6 +523,48 @@ Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_removeSubLevel
     data.objectChunkShapes.erase((LevelColliderID)id);
 }
 
+JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_getLinearVelocity(
+    JNIEnv* env, jclass, jlong world, jint id, jdoubleArray out)
+{
+    std::lock_guard<std::recursive_mutex> lock(g_physicsMutex);
+
+    jdouble tmp[3] = { 0.0, 0.0, 0.0 };
+
+    WorldData& data = getWorldData(world);
+
+    auto it = data.bodies.find((LevelColliderID)id);
+    if (it != data.bodies.end()) {
+        auto velocity = b3Body_GetLinearVelocity(it->second);
+
+        tmp[0] = velocity.x;
+        tmp[1] = velocity.y;
+        tmp[2] = velocity.z;
+    }
+
+    env->SetDoubleArrayRegion(out, 0, 3, tmp);
+}
+
+JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_getAngularVelocity(
+    JNIEnv* env, jclass, jlong world, jint id, jdoubleArray out)
+{
+    std::lock_guard<std::recursive_mutex> lock(g_physicsMutex);
+
+    jdouble tmp[3] = { 0.0, 0.0, 0.0 };
+
+    WorldData& data = getWorldData(world);
+
+    auto it = data.bodies.find((LevelColliderID)id);
+    if (it != data.bodies.end()) {
+        auto velocity = b3Body_GetAngularVelocity(it->second);
+
+        tmp[0] = velocity.x;
+        tmp[1] = velocity.y;
+        tmp[2] = velocity.z;
+    }
+
+    env->SetDoubleArrayRegion(out, 0, 3, tmp);
+}
+
 JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_addChunk(
     JNIEnv* env, jclass, jlong worldHandle, jint x, jint y, jint z,
     jintArray intData, jboolean global, jint object_id)
@@ -525,28 +578,15 @@ JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_addC
 
     for (int i = 0; i < 4096; i++) {
         uint32_t block = (uint32_t)ints[i];
-
         uint16_t blockColliderId = block >> 16;
         uint16_t voxelStateId = block & 0xFFFF;
 
         if (voxelStateId >= 5) {
-            voxelStateId = 0; // EMPTY
+            voxelStateId = 0;
         }
 
         blocks.push_back({ (uint32_t)blockColliderId, ALL_VOXEL_PHYSICS_STATES[voxelStateId] });
     }
-
-    // =========================
-        // CREATE BODY
-    // =========================
-
-    b3BodyDef def = b3DefaultBodyDef();
-    def.position = {
-        static_cast<double>(x << CHUNK_SHIFT),
-        static_cast<double>(y << CHUNK_SHIFT),
-        static_cast<double>(z << CHUNK_SHIFT)
-    };
-    def.rotation = b3Quat_identity;
 
     WorldData& data = getWorldData(worldHandle);
     int64_t packedPos = packSectionPosition(x, y, z);
@@ -555,54 +595,89 @@ JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_addC
         packedPos,
         ChunkSection(std::move(blocks))
     );
-
     ChunkSection& storedChunk = it->second;
-    storedChunk.body = b3CreateBody(toWorld(worldHandle), &def);
 
     if (global != 0) {
+        // === Статичный мир: у чанка своё собственное тело в мировых координатах ===
+        storedChunk.isGlobal = true;
+
+        b3BodyDef def = b3DefaultBodyDef();
+        def.position = {
+            static_cast<double>(x << CHUNK_SHIFT),
+            static_cast<double>(y << CHUNK_SHIFT),
+            static_cast<double>(z << CHUNK_SHIFT)
+        };
+        def.rotation = b3Quat_identity;
+
+        storedChunk.body = b3CreateBody(toWorld(worldHandle), &def);
+
         for (int bx = 0; bx < CHUNK_SIZE; bx++) {
             for (int by = 0; by < CHUNK_SIZE; by++) {
                 for (int bz = 0; bz < CHUNK_SIZE; bz++) {
                     BlockState blockState = storedChunk.get_block(bx, by, bz);
-
-                    if (!isSolidBlock(blockState)) {
-                        continue;
-                    }
+                    if (!isSolidBlock(blockState)) continue;
 
                     const VoxelColliderData* colliderData = getVoxelColliderData(blockState.block_collider_id);
-
-                    if (!colliderData) {
-                        continue;
-                    }
+                    if (!colliderData) continue;
 
                     int index = getBlockIndex(bx, by, bz);
-
                     storedChunk.shapes[index] =
-                        createBlockShapes(
-                            storedChunk.body,
-                            *colliderData,
-                            bx,
-                            by,
-                            bz
-                        );
+                        createBlockShapes(storedChunk.body, *colliderData, bx, by, bz);
                 }
             }
         }
         return;
     }
 
-    /*if (object_id == -1) { TODO: Fix it with using new function createChunkShapes.
+    // === Чанк саблевела: своего тела НЕТ, шейпы вешаются прямо на тело саблевела ===
+    storedChunk.isGlobal = false;
+
+    if (object_id == -1) {
+        // Тело саблевела ещё не создано (гонка при сборке?). Не создаём паразитных
+        // тел — просто оставляем чанк без шейпов, changeBlock подхватит его позже
+        // как только object_id придёт (или он будет пересобран).
         return;
     }
 
-    b3BodyId objectBody = data.bodies.at((LevelColliderID)object_id);
+    storedChunk.objectId = (LevelColliderID)object_id;
 
-    std::vector<b3ShapeId>& shapes = data.objectChunkShapes[(LevelColliderID)object_id][packedPos];
-    destroyChunkShapes(shapes);
+    auto bodyIt = data.bodies.find((LevelColliderID)object_id);
+    if (bodyIt == data.bodies.end()) {
+        // Защита: сослались на несуществующее тело саблевела. Раньше здесь
+        // тихо создавалось лишнее тело — теперь просто выходим.
+        return;
+    }
 
-    shapes = createChunkShapes(
-        objectBody, storedChunk,
-        x << CHUNK_SHIFT, y << CHUNK_SHIFT, z << CHUNK_SHIFT);*/
+    b3BodyId objectBody = bodyIt->second;
+    if (!b3Body_IsValid(objectBody)) {
+        return;
+    }
+
+    for (int bx = 0; bx < CHUNK_SIZE; bx++) {
+        for (int by = 0; by < CHUNK_SIZE; by++) {
+            for (int bz = 0; bz < CHUNK_SIZE; bz++) {
+                BlockState blockState = storedChunk.get_block(bx, by, bz);
+                if (!isSolidBlock(blockState)) continue;
+
+                const VoxelColliderData* colliderData = getVoxelColliderData(blockState.block_collider_id);
+                if (!colliderData) continue;
+
+                int index = getBlockIndex(bx, by, bz);
+
+                // ВАЖНО: глобальные координаты блока, а не локальные (0..15) —
+                // тело саблевела стоит не в начале этого чанка, а в своём origin.
+                int32_t globalBX = (x << CHUNK_SHIFT) + bx;
+                int32_t globalBY = (y << CHUNK_SHIFT) + by;
+                int32_t globalBZ = (z << CHUNK_SHIFT) + bz;
+
+                storedChunk.shapes[index] =
+                    createBlockShapes(objectBody, *colliderData, globalBX, globalBY, globalBZ);
+            }
+        }
+    }
+
+    b3Body_ApplyMassFromShapes(objectBody);
+    b3Body_SetAwake(objectBody, true);
 }
 
 JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_removeChunk(
@@ -645,85 +720,74 @@ Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_changeBlock
 (JNIEnv*, jclass, jlong worldHandle, jint x, jint y, jint z, jint packedBlock)
 {
     std::lock_guard<std::recursive_mutex> lock(g_physicsMutex);
-
     WorldData& data = getWorldData(worldHandle);
 
     uint32_t packed = (uint32_t)packedBlock;
-
     uint16_t blockColliderId = packed >> 16;
     uint16_t voxelStateId = packed & 0xFFFF;
+    if (voxelStateId >= 5) voxelStateId = 0;
 
-    if (voxelStateId >= 5) {
-        voxelStateId = 0;
-    }
+    BlockState blockState{ (uint32_t)blockColliderId, ALL_VOXEL_PHYSICS_STATES[voxelStateId] };
 
-    BlockState blockState{
-        (uint32_t)blockColliderId,
-        ALL_VOXEL_PHYSICS_STATES[voxelStateId]
-    };
-
-
-    // Координаты секции
     int32_t sectionX = x >> CHUNK_SHIFT;
     int32_t sectionY = y >> CHUNK_SHIFT;
     int32_t sectionZ = z >> CHUNK_SHIFT;
-
-
-    int64_t sectionPos =
-        packSectionPosition(sectionX, sectionY, sectionZ);
-
+    int64_t sectionPos = packSectionPosition(sectionX, sectionY, sectionZ);
 
     auto chunkIt = data.mainLevelChunks.find(sectionPos);
-
     if (chunkIt == data.mainLevelChunks.end()) {
         return;
     }
 
-
     ChunkSection& chunk = chunkIt->second;
 
-
-    // Локальные координаты блока в секции
     int bx = x & (CHUNK_SIZE - 1);
     int by = y & (CHUNK_SIZE - 1);
     int bz = z & (CHUNK_SIZE - 1);
-
-
     int index = getBlockIndex(bx, by, bz);
 
-
-    // Удаляем старую коллизию блока
-
-    dbg("index=%zu size=%zu", index, chunk.shapes.size());
     destroyChunkShapes(chunk.shapes[index]);
-
-
-    // Обновляем состояние блока
     chunk.set_block(bx, by, bz, blockState);
 
+    // Тело-владелец этого чанка (актуально только для чанков саблевела).
+    b3BodyId ownerBody = b3_nullBodyId;
+    if (!chunk.isGlobal) {
+        auto bodyIt = data.bodies.find(chunk.objectId);
+        if (bodyIt != data.bodies.end()) {
+            ownerBody = bodyIt->second;
+        }
+    }
+
+    auto finalizeMass = [&]() {
+        if (!chunk.isGlobal && b3Body_IsValid(ownerBody)) {
+            b3Body_ApplyMassFromShapes(ownerBody);
+        }
+        };
 
     if (!isSolidBlock(blockState)) {
+        finalizeMass();  // destroyChunkShapes выше уже мог выставить dirtyMass
         return;
     }
 
-
-    const VoxelColliderData* colliderData =
-        getVoxelColliderData(blockState.block_collider_id);
-
-
+    const VoxelColliderData* colliderData = getVoxelColliderData(blockState.block_collider_id);
     if (!colliderData) {
+        finalizeMass();
         return;
     }
 
-
-    chunk.shapes[index] =
-        createBlockShapes(
-            chunk.body,
-            *colliderData,
-            bx,
-            by,
-            bz
-        );
+    if (chunk.isGlobal) {
+        if (!b3Body_IsValid(chunk.body)) {
+            return;
+        }
+        chunk.shapes[index] = createBlockShapes(chunk.body, *colliderData, bx, by, bz);
+    }
+    else {
+        if (!b3Body_IsValid(ownerBody)) {
+            return;
+        }
+        chunk.shapes[index] = createBlockShapes(ownerBody, *colliderData, x, y, z);
+        b3Body_ApplyMassFromShapes(ownerBody);
+    }
 }
 
 // =======================

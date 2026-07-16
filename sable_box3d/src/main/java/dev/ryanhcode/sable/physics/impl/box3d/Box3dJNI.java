@@ -111,11 +111,12 @@ public final class Box3dJNI {
 
     public static native long createSubLevel(long worldHandle, int id, double[] pose);
     public static native void removeSubLevel(long worldHandle, int id);
-
+    public static native void getLinearVelocity(long worldHandle, int id, double[] array);
+    public static native void getAngularVelocity(long worldHandle, int id, double[] array);
     public static native void addChunk(long worldHandle, int x, int y, int z, int[] data, boolean global, int objectId);
     public static native void removeChunk(long worldHandle, int x, int y, int z, boolean global);
-
     public static native void changeBlock(long worldHandle, int x, int y, int z, int packedBlock);
+
 
     /**
      * All poses are formatted in a double array as:
