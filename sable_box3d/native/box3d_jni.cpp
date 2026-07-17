@@ -212,7 +212,7 @@ static std::vector<b3ShapeId> createBlockShapes(
     b3ShapeDef shapeDef = b3DefaultShapeDef();
     shapeDef.baseMaterial.friction = colliderData.friction;
     shapeDef.baseMaterial.restitution = colliderData.restitution;
-    shapeDef.density = 0.0f;
+    shapeDef.density = 1.0f;
     shapeDef.updateBodyMass = false;
 
     for (const VoxelColliderBox& box : colliderData.collisionBoxes) {
@@ -348,6 +348,8 @@ JNIEXPORT void JNICALL
 Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_worldStep
 (JNIEnv*, jclass, jlong world, jfloat dt, jint substeps)
 {
+    std::lock_guard<std::recursive_mutex> lock(g_physicsMutex);
+
     b3World_Step(toWorld(world), dt, substeps);
 }
 
@@ -429,7 +431,7 @@ Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_createSubLevel
 {
     std::lock_guard<std::recursive_mutex> lock(g_physicsMutex);
 
-    auto worldIt = worldData.find((uint32_t)world);
+    WorldData& data = getWorldData(world);
 
     b3WorldId worldId = toWorld(world);
 
@@ -459,37 +461,6 @@ Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_createSubLevel
     );
 
     b3BodyId body = b3CreateBody(worldId, &def);
-
-    b3ShapeDef shapeDef = b3DefaultShapeDef();
-
-    b3BoxHull box = b3MakeBoxHull(
-        0.5f,
-        0.5f,
-        0.5f
-    );
-
-    b3ShapeId shape = b3CreateHullShape(
-        body,
-        &shapeDef,
-        &box.base
-    );
-
-    b3MassData massData;
-
-    massData.mass = 1.0f;
-    massData.center = {
-        0.0f,
-        0.0f,
-        0.0f
-    };
-    massData.inertia = b3Mat3_identity;
-
-    b3Body_SetMassData(
-        body,
-        massData
-    );
-
-    WorldData& data = worldIt->second;
 
     auto existing = data.bodies.find((LevelColliderID)id);
 
@@ -683,7 +654,11 @@ JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_addC
 JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_removeChunk(
     JNIEnv*, jclass, jlong worldHandle, jint x, jint y, jint z, jboolean global)
 {
-     std::lock_guard<std::recursive_mutex> lock(g_physicsMutex);
+    std::lock_guard<std::recursive_mutex> lock(g_physicsMutex);
+
+    if (global == false) {
+        return;
+    }
 
     WorldData& data = getWorldData(worldHandle);
 
@@ -697,14 +672,16 @@ JNIEXPORT void JNICALL Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_remo
 
     ChunkSection& chunk = it->second;
 
-    // Удаляем все shape'ы секции
-    for (auto& shapes : chunk.shapes) {
-        destroyChunkShapes(shapes);
-    }
+    if (chunk.isGlobal) {
+        // Удаляем все shape'ы секции
+        for (auto& shapes : chunk.shapes) {
+            destroyChunkShapes(shapes);
+        }
 
-    // Удаляем тело секции
-    if (b3Body_IsValid(chunk.body)) {
-        b3DestroyBody(chunk.body);
+        // Удаляем тело секции
+        if (b3Body_IsValid(chunk.body)) {
+            b3DestroyBody(chunk.body);
+        }
     }
 
     data.mainLevelChunks.erase(it);
@@ -761,8 +738,9 @@ Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_changeBlock
     auto finalizeMass = [&]() {
         if (!chunk.isGlobal && b3Body_IsValid(ownerBody)) {
             b3Body_ApplyMassFromShapes(ownerBody);
+            b3Body_SetAwake(ownerBody, true);
         }
-        };
+    };
 
     if (!isSolidBlock(blockState)) {
         finalizeMass();  // destroyChunkShapes выше уже мог выставить dirtyMass
@@ -786,7 +764,13 @@ Java_dev_ryanhcode_sable_physics_impl_box3d_Box3dJNI_changeBlock
             return;
         }
         chunk.shapes[index] = createBlockShapes(ownerBody, *colliderData, x, y, z);
+        b3Pos before = b3Body_GetPosition(ownerBody);
+        dbg("before %.3f %.3f %.3f", before.x, before.y, before.z);
         b3Body_ApplyMassFromShapes(ownerBody);
+        b3Body_SetAwake(ownerBody, true);
+        b3Pos after = b3Body_GetPosition(ownerBody);
+        dbg("after  %.3f %.3f %.3f", after.x, after.y, after.z);
+     
     }
 }
 

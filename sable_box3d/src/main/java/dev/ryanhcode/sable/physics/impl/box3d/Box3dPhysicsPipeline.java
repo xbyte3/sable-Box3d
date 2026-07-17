@@ -238,9 +238,7 @@ public class Box3dPhysicsPipeline implements PhysicsPipeline {
             sendY = y - (center.getY() >> 4);
             sendZ = z - (center.getZ() >> 4);
 
-            if (uploadDataIfGlobal) {
-                id = ((ServerSubLevel) plot.getSubLevel()).getRuntimeId();
-            }
+            id = ((ServerSubLevel) plot.getSubLevel()).getRuntimeId(); // всегда, без if (uploadDataIfGlobal)
         }
 
         Box3dJNI.addChunk(this.worldHandle, sendX, sendY, sendZ, array, global, id);
